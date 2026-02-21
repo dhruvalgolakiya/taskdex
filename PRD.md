@@ -59,7 +59,7 @@ Currently messages are in AsyncStorage (fragile, single device). Agent state is 
   - `settings` — id, bridgeUrl, theme, preferences
 - [x] Create mutations: `saveMessage`, `saveThread`, `saveWorkspace`
 - [x] Create queries: `getMessages(threadId)`, `getThreads(workspaceId)`, `getWorkspaces`
-- [ ] Wire `ConvexProvider` into App.tsx
+- [x] Wire `ConvexProvider` into App.tsx
 
 ### 1.2 Message Persistence
 

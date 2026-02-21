@@ -20,6 +20,7 @@ import { registerRootComponent } from 'expo';
 import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
+import { ConvexProvider, ConvexReactClient } from 'convex/react';
 import {
   Manrope_400Regular,
   Manrope_500Medium,
@@ -1166,7 +1167,10 @@ function WorkspaceScreen({
   );
 }
 
-function App() {
+const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
+const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
+
+function AppContent() {
   const systemTheme = useColorScheme();
   const { loadBridgeUrl, loadSavedAgents, urlLoaded, agentsLoaded } = useAgentStore();
   const { loadSavedWorkspaces, loaded: workspacesLoaded } = useWorkspaceStore();
@@ -1228,6 +1232,18 @@ function App() {
         />
       </SafeAreaView>
     </SafeAreaProvider>
+  );
+}
+
+function App() {
+  if (!convexClient) {
+    return <AppContent />;
+  }
+
+  return (
+    <ConvexProvider client={convexClient}>
+      <AppContent />
+    </ConvexProvider>
   );
 }
 
