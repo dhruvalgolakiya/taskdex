@@ -2,8 +2,8 @@ import { ConvexReactClient } from 'convex/react';
 import { api } from '../convex/_generated/api';
 import type { AgentMessage, AgentWorkspace, AgentThread } from '../types';
 
-export const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
-export const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
+export const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL || 'http://127.0.0.1:3210';
+export const convexClient = new ConvexReactClient(convexUrl);
 
 function hashText(value: string): string {
   let hash = 0;
@@ -121,16 +121,10 @@ export async function persistThreadRecord(input: ThreadRecordInput): Promise<voi
 export async function fetchWorkspaceGraph(): Promise<AgentWorkspace[] | null> {
   if (!convexClient) return null;
   try {
-    const workspaceRows = await convexClient.query(api.persistence.getWorkspaces, {});
-    const threadRowsByWorkspace = await Promise.all(
-      workspaceRows.map((workspace) =>
-        convexClient.query(api.persistence.getThreads, { workspaceId: workspace.id })),
-    );
-
-    const workspaces: AgentWorkspace[] = workspaceRows
-      .map((workspace, index) => {
-        const threads: AgentThread[] = [...threadRowsByWorkspace[index]]
-          .sort((a, b) => a.createdAt - b.createdAt)
+    const graphRows = await convexClient.query(api.persistence.getWorkspaceGraph, {});
+    const workspaces: AgentWorkspace[] = graphRows
+      .map((workspace) => {
+        const threads: AgentThread[] = [...workspace.threads]
           .map((thread) => ({
             id: thread.id,
             title: thread.title,

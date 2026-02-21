@@ -20,7 +20,7 @@ import { registerRootComponent } from 'expo';
 import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
-import { ConvexProvider } from 'convex/react';
+import { ConvexProvider, useQuery } from 'convex/react';
 import {
   Manrope_400Regular,
   Manrope_500Medium,
@@ -40,6 +40,7 @@ import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import type { AgentMessage, QueuedMessage } from './types';
+import { api } from './convex/_generated/api';
 import {
   convexClient,
   fetchThreadMessages,
@@ -92,6 +93,24 @@ function getConnectionLabel(status: string) {
   return 'Disconnected from bridge';
 }
 
+function messageIdentity(message: AgentMessage): string {
+  if (message._itemId) return `item:${message._itemId}`;
+  return `${message.role}:${message.type}:${message.timestamp}:${message.text}`;
+}
+
+function mergeLocalAndLiveMessages(localMessages: AgentMessage[], liveMessages: AgentMessage[]): AgentMessage[] {
+  const merged = new Map<string, AgentMessage>();
+  for (const message of localMessages) {
+    merged.set(messageIdentity(message), message);
+  }
+  for (const message of liveMessages) {
+    const key = messageIdentity(message);
+    const existing = merged.get(key);
+    merged.set(key, existing ? { ...existing, ...message } : message);
+  }
+  return Array.from(merged.values()).sort((a, b) => a.timestamp - b.timestamp);
+}
+
 interface WorkspaceScreenProps {
   colors: Palette;
   connectionColors: Record<string, string>;
@@ -140,6 +159,7 @@ function WorkspaceScreen({
     setActiveThread,
     removeThreadFromWorkspace,
     updateWorkspaceModel,
+    setWorkspacesFromConvex,
     ensureWorkspacesFromAgents,
     cleanupMissingAgentThreads,
   } = useWorkspaceStore();
@@ -186,6 +206,11 @@ function WorkspaceScreen({
     () => activeWorkspace?.threads.find((thread) => thread.id === activeThreadId) || null,
     [activeWorkspace, activeThreadId],
   );
+  const liveWorkspaceGraph = useQuery(api.persistence.getWorkspaceGraph, {});
+  const liveThreadMessages = useQuery(
+    api.persistence.getMessages,
+    activeThreadId ? { threadId: activeThreadId, limit: 50 } : 'skip',
+  );
   const activeAgent = useAgentStore(
     useCallback((state) => {
       if (!activeThreadId) return null;
@@ -220,6 +245,63 @@ function WorkspaceScreen({
   }, [bridgeUrl]);
 
   useEffect(() => {
+    if (!liveWorkspaceGraph) return;
+    const existingWorkspaces = useWorkspaceStore.getState().workspaces;
+    const existingActiveThreadByWorkspace = new Map(
+      existingWorkspaces.map((workspace) => [workspace.id, workspace.activeThreadId]),
+    );
+
+    const nextWorkspaces = liveWorkspaceGraph.map((workspace) => {
+      const threads = workspace.threads.map((thread) => ({
+        id: thread.id,
+        title: thread.title,
+        createdAt: thread.createdAt,
+      }));
+      const existingActiveThreadId = existingActiveThreadByWorkspace.get(workspace.id);
+      const activeThreadId = existingActiveThreadId && threads.some((thread) => thread.id === existingActiveThreadId)
+        ? existingActiveThreadId
+        : (threads[0]?.id || null);
+      return {
+        id: workspace.id,
+        name: workspace.name,
+        model: workspace.model,
+        cwd: workspace.cwd,
+        threads,
+        activeThreadId,
+        createdAt: workspace.createdAt,
+        updatedAt: threads[threads.length - 1]?.createdAt || workspace.createdAt,
+      };
+    });
+
+    setWorkspacesFromConvex(nextWorkspaces);
+  }, [liveWorkspaceGraph, setWorkspacesFromConvex]);
+
+  useEffect(() => {
+    if (!activeThreadId || !liveThreadMessages) return;
+    const liveMessages = liveThreadMessages.map((message) => ({
+      role: message.role,
+      type: message.type,
+      text: message.text,
+      timestamp: message.timestamp,
+      _itemId: message.itemId,
+      streaming: message.streaming,
+    })) as AgentMessage[];
+
+    const localMessages = useAgentStore
+      .getState()
+      .agents.find((agent) => agent.id === activeThreadId)?.messages || [];
+    const mergedMessages = mergeLocalAndLiveMessages(localMessages, liveMessages);
+
+    setAgentMessages(activeThreadId, mergedMessages);
+    const paging = threadPagingState.current[activeThreadId];
+    threadPagingState.current[activeThreadId] = {
+      oldestTimestamp: mergedMessages[0]?.timestamp || null,
+      hasMore: liveThreadMessages.length === 50,
+      loading: paging?.loading || false,
+    };
+  }, [activeThreadId, liveThreadMessages, setAgentMessages]);
+
+  useEffect(() => {
     if (!showEditModel) return;
     setModelInput(activeAgent?.model || activeWorkspace?.model || '');
   }, [showEditModel, activeAgent?.id, activeAgent?.model, activeWorkspace?.id, activeWorkspace?.model]);
@@ -245,6 +327,7 @@ function WorkspaceScreen({
 
   useEffect(() => {
     if (!activeThreadId) return;
+    if (liveThreadMessages) return;
     let cancelled = false;
 
     const loadMessages = async () => {
@@ -265,7 +348,7 @@ function WorkspaceScreen({
     return () => {
       cancelled = true;
     };
-  }, [activeThreadId, setAgentMessages]);
+  }, [activeThreadId, liveThreadMessages, setAgentMessages]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!activeThreadId) return;
@@ -1336,10 +1419,6 @@ function AppContent() {
 }
 
 function App() {
-  if (!convexClient) {
-    return <AppContent />;
-  }
-
   return (
     <ConvexProvider client={convexClient}>
       <AppContent />

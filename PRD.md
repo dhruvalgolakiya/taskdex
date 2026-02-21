@@ -79,9 +79,9 @@ Currently messages are in AsyncStorage (fragile, single device). Agent state is 
 
 ### 1.4 Cross-Device Sync
 
-- [ ] Convex subscriptions auto-update message list on all devices
-- [ ] Open same bridge from phone + tablet — see same threads/messages
-- [ ] No extra code needed — Convex handles this via reactive queries
+- [x] Convex subscriptions auto-update message list on all devices
+- [x] Open same bridge from phone + tablet — see same threads/messages
+- [x] No extra code needed — Convex handles this via reactive queries
 
 ---
 

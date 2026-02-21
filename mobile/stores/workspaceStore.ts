@@ -32,6 +32,7 @@ interface WorkspaceStore {
   }) => void;
   setActiveThread: (workspaceId: string, threadAgentId: string) => void;
   updateWorkspaceModel: (workspaceId: string, model: string) => void;
+  setWorkspacesFromConvex: (workspaces: AgentWorkspace[]) => void;
   ensureWorkspacesFromAgents: (
     agents: { id: string; name: string; model: string; cwd: string }[],
   ) => void;
@@ -147,6 +148,15 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     );
     set({ workspaces });
     persist(workspaces, get().activeWorkspaceId);
+  },
+
+  setWorkspacesFromConvex: (workspaces) => {
+    const prevActiveWorkspaceId = get().activeWorkspaceId;
+    const activeWorkspaceId = prevActiveWorkspaceId && workspaces.some((workspace) => workspace.id === prevActiveWorkspaceId)
+      ? prevActiveWorkspaceId
+      : (workspaces[0]?.id || null);
+    set({ workspaces, activeWorkspaceId });
+    persist(workspaces, activeWorkspaceId);
   },
 
   ensureWorkspacesFromAgents: (agents) => {

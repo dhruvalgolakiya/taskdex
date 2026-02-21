@@ -148,6 +148,32 @@ export const getWorkspaces = query({
   },
 });
 
+export const getWorkspaceGraph = query({
+  args: {},
+  handler: async (ctx) => {
+    const workspaces = await ctx.db.query("workspaces").withIndex("by_createdAt").collect();
+    const threadsByWorkspace = await Promise.all(
+      workspaces.map((workspace) =>
+        ctx.db
+          .query("threads")
+          .withIndex("by_workspaceId", (q) => q.eq("workspaceId", workspace.id))
+          .collect()),
+    );
+
+    return workspaces.map((workspace, index) => ({
+      ...workspace,
+      threads: threadsByWorkspace[index]
+        .sort((a, b) => a.createdAt - b.createdAt)
+        .map((thread) => ({
+          id: thread.id,
+          title: thread.title,
+          createdAt: thread.createdAt,
+          bridgeAgentId: thread.bridgeAgentId,
+        })),
+    }));
+  },
+});
+
 export const getSettings = query({
   args: {
     id: v.string(),
