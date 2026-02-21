@@ -19,17 +19,14 @@
         "NSSupportsLiveActivities": true,
         "NSSupportsLiveActivitiesFrequentUpdates": false
       },
-      "entitlements": {},
-      "bundleIdentifier": "com.dhruvalg.novachat",
-      "appleTeamId": "V5FMGB2B26"
+      "entitlements": {}
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "package": "com.dhruvalg.novachat"
+      "edgeToEdgeEnabled": true
     },
     "web": {
       "bundler": "metro",
@@ -38,12 +35,6 @@
     "plugins": [
       "expo-notifications",
       "expo-live-activity"
-    ],
-    "extra": {
-      "eas": {
-        "projectId": "86425b89-c877-443d-a185-066ecd19bc3e"
-      }
-    },
-    "owner": "dhruvalg"
+    ]
   }
 }
