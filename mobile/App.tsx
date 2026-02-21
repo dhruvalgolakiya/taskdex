@@ -140,7 +140,9 @@ function WorkspaceScreen({
   const connectionStatus = useAgentStore((state) => state.connectionStatus);
   const agents = useAgentStore((state) => state.agents);
   const bridgeUrl = useAgentStore((state) => state.bridgeUrl);
+  const bridgeApiKey = useAgentStore((state) => state.bridgeApiKey);
   const setBridgeUrl = useAgentStore((state) => state.setBridgeUrl);
+  const setBridgeApiKey = useAgentStore((state) => state.setBridgeApiKey);
   const removeAgent = useAgentStore((state) => state.removeAgent);
   const updateQueuedMessage = useAgentStore((state) => state.updateQueuedMessage);
   const removeQueuedMessage = useAgentStore((state) => state.removeQueuedMessage);
@@ -187,8 +189,11 @@ function WorkspaceScreen({
   const createThreadInFlight = useRef(false);
 
   const [urlInput, setUrlInput] = useState(bridgeUrl);
+  const [apiKeyInput, setApiKeyInput] = useState(bridgeApiKey);
   const [saved, setSaved] = useState(false);
   const [sendingTestNotification, setSendingTestNotification] = useState(false);
+  const [bridgeHealth, setBridgeHealth] = useState<string>('Health unknown');
+  const [checkingHealth, setCheckingHealth] = useState(false);
   const [modelInput, setModelInput] = useState('');
   const [savingModel, setSavingModel] = useState(false);
   const [queueCollapsed, setQueueCollapsed] = useState(false);
@@ -243,6 +248,10 @@ function WorkspaceScreen({
   useEffect(() => {
     setUrlInput(bridgeUrl);
   }, [bridgeUrl]);
+
+  useEffect(() => {
+    setApiKeyInput(bridgeApiKey);
+  }, [bridgeApiKey]);
 
   useEffect(() => {
     if (!liveWorkspaceGraph) return;
@@ -705,10 +714,62 @@ function WorkspaceScreen({
     );
   };
 
+  const getHealthEndpoint = useCallback((socketUrl: string) => {
+    const parsed = new URL(socketUrl);
+    parsed.protocol = parsed.protocol === 'wss:' ? 'https:' : 'http:';
+    parsed.pathname = '/health';
+    parsed.search = '';
+    return parsed.toString();
+  }, []);
+
+  const handleCheckBridgeHealth = useCallback(async () => {
+    const trimmedUrl = urlInput.trim();
+    const trimmedKey = apiKeyInput.trim();
+    if (!trimmedUrl) {
+      setBridgeHealth('Bridge URL is required');
+      return;
+    }
+    if (!trimmedKey) {
+      setBridgeHealth('API key is required');
+      return;
+    }
+
+    setCheckingHealth(true);
+    try {
+      const endpoint = getHealthEndpoint(trimmedUrl);
+      const res = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${trimmedKey}` },
+      });
+      if (!res.ok) {
+        setBridgeHealth(`Health check failed (${res.status})`);
+        return;
+      }
+      const payload = await res.json() as {
+        agents?: number;
+        connectedClients?: number;
+        system?: { hostname?: string };
+      };
+      setBridgeHealth(
+        `OK • agents ${payload.agents ?? 0} • clients ${payload.connectedClients ?? 0} • ${payload.system?.hostname || 'unknown host'}`,
+      );
+    } catch (err: any) {
+      setBridgeHealth(err?.message || 'Health check failed');
+    } finally {
+      setCheckingHealth(false);
+    }
+  }, [apiKeyInput, getHealthEndpoint, urlInput]);
+
+  useEffect(() => {
+    if (!showSettings) return;
+    void handleCheckBridgeHealth();
+  }, [showSettings, handleCheckBridgeHealth]);
+
   const handleSaveBridgeUrl = () => {
     setBridgeUrl(urlInput.trim());
+    setBridgeApiKey(apiKeyInput.trim());
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
+    void handleCheckBridgeHealth();
   };
 
   const handleSendTestNotification = async () => {
@@ -1242,6 +1303,18 @@ function WorkspaceScreen({
               autoCorrect={false}
               keyboardType="url"
             />
+            <Text style={s.label}>Bridge API Key</Text>
+            <TextInput
+              style={s.input}
+              value={apiKeyInput}
+              onChangeText={setApiKeyInput}
+              placeholder="Paste bridge API key"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={true}
+            />
+            <Text style={s.themeHint}>{bridgeHealth}</Text>
             <Text style={s.label}>Appearance</Text>
             <View style={s.themeModeRow}>
               {(['system', 'light', 'dark'] as ThemePreference[]).map((mode) => {
@@ -1261,6 +1334,13 @@ function WorkspaceScreen({
             </View>
             <Text style={s.themeHint}>Current theme: {resolvedTheme}</Text>
             <View style={s.settingsInlineActions}>
+              <Pressable
+                style={[s.cancelBtn, checkingHealth && s.smallActionBtnDisabled]}
+                onPress={() => void handleCheckBridgeHealth()}
+                disabled={checkingHealth}
+              >
+                <Text style={s.cancelText}>{checkingHealth ? 'Checking...' : 'Check Health'}</Text>
+              </Pressable>
               <Pressable
                 style={[s.cancelBtn, sendingTestNotification && s.smallActionBtnDisabled]}
                 onPress={handleSendTestNotification}

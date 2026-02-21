@@ -87,11 +87,23 @@ function connectWs(url: string) {
 
   ws.onopen = () => {
     if (globalWs !== ws) return;
-    useAgentStore.getState().setConnectionStatus('connected');
-    // Sync agents from bridge on connect
-    syncAgents();
-    // Register push token for background notifications
-    registerPushToken();
+    const { bridgeApiKey, clientId } = useAgentStore.getState();
+    const requestId = `req_${++requestCounter}`;
+    globalPending.set(requestId, (res) => {
+      if (res.type === 'response') {
+        useAgentStore.getState().setConnectionStatus('connected');
+        syncAgents();
+        registerPushToken();
+        return;
+      }
+      useAgentStore.getState().setConnectionStatus('disconnected');
+      ws.close();
+    });
+    ws.send(JSON.stringify({
+      action: 'auth',
+      params: { key: bridgeApiKey, clientId },
+      requestId,
+    }));
   };
 
   ws.onmessage = (event) => {
@@ -454,11 +466,13 @@ export async function sendMessageToAgent(agentId: string, text: string) {
 
 export function useWebSocket() {
   const bridgeUrl = useAgentStore((s) => s.bridgeUrl);
+  const bridgeApiKey = useAgentStore((s) => s.bridgeApiKey);
+  const clientId = useAgentStore((s) => s.clientId);
 
   useEffect(() => {
     connectWs(bridgeUrl);
     return () => cleanup();
-  }, [bridgeUrl]);
+  }, [bridgeUrl, bridgeApiKey, clientId]);
 
   const send = useCallback(
     (action: string, params?: Record<string, unknown>): Promise<BridgeResponse> => sendRequest(action, params),

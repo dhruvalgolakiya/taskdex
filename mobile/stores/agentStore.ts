@@ -4,17 +4,22 @@ import type { Agent, AgentMessage, AgentStatus, MessageType, QueuedMessage } fro
 import { fetchBridgeSetting, persistBridgeSetting, persistMessage } from '../lib/convexClient';
 
 const BRIDGE_URL_KEY = 'codex_bridge_url';
+const BRIDGE_API_KEY_KEY = 'codex_bridge_api_key';
+const CLIENT_ID_KEY = 'codex_client_id';
 const AGENTS_KEY = 'codex_agents';
 
 interface AgentStore {
   agents: Agent[];
   connectionStatus: 'connecting' | 'connected' | 'disconnected';
   bridgeUrl: string;
+  bridgeApiKey: string;
+  clientId: string;
   urlLoaded: boolean;
   agentsLoaded: boolean;
 
   setConnectionStatus: (status: AgentStore['connectionStatus']) => void;
   setBridgeUrl: (url: string) => void;
+  setBridgeApiKey: (apiKey: string) => void;
   loadBridgeUrl: () => Promise<void>;
   loadSavedAgents: () => Promise<void>;
   setAgents: (agents: Agent[]) => void;
@@ -50,6 +55,10 @@ function createQueuedMessage(text: string): QueuedMessage {
     text,
     createdAt: Date.now(),
   };
+}
+
+function createClientId(): string {
+  return `client_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function normalizeQueuedMessages(input: unknown): QueuedMessage[] {
@@ -104,6 +113,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   agents: [],
   connectionStatus: 'disconnected',
   bridgeUrl: 'ws://localhost:3001',
+  bridgeApiKey: '',
+  clientId: '',
   urlLoaded: false,
   agentsLoaded: false,
 
@@ -111,24 +122,30 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   setBridgeUrl: (url) => {
     AsyncStorage.setItem(BRIDGE_URL_KEY, url);
-    void persistBridgeSetting({ bridgeUrl: url });
+    void persistBridgeSetting({ bridgeUrl: url, apiKey: get().bridgeApiKey });
     set({ bridgeUrl: url });
   },
 
-  loadBridgeUrl: async () => {
-    const convexBridgeUrl = await fetchBridgeSetting();
-    if (convexBridgeUrl) {
-      set({ bridgeUrl: convexBridgeUrl, urlLoaded: true });
-      AsyncStorage.setItem(BRIDGE_URL_KEY, convexBridgeUrl).catch(() => {});
-      return;
-    }
+  setBridgeApiKey: (apiKey) => {
+    AsyncStorage.setItem(BRIDGE_API_KEY_KEY, apiKey);
+    void persistBridgeSetting({ bridgeUrl: get().bridgeUrl, apiKey });
+    set({ bridgeApiKey: apiKey });
+  },
 
+  loadBridgeUrl: async () => {
+    const convexSettings = await fetchBridgeSetting();
     const saved = await AsyncStorage.getItem(BRIDGE_URL_KEY);
-    if (saved) {
-      set({ bridgeUrl: saved, urlLoaded: true });
-    } else {
-      set({ urlLoaded: true });
-    }
+    const savedApiKey = await AsyncStorage.getItem(BRIDGE_API_KEY_KEY);
+    const savedClientId = await AsyncStorage.getItem(CLIENT_ID_KEY);
+
+    const bridgeUrl = convexSettings?.bridgeUrl || saved || 'ws://localhost:3001';
+    const bridgeApiKey = convexSettings?.apiKey || savedApiKey || '';
+    const clientId = savedClientId || createClientId();
+
+    set({ bridgeUrl, bridgeApiKey, clientId, urlLoaded: true });
+    AsyncStorage.setItem(BRIDGE_URL_KEY, bridgeUrl).catch(() => {});
+    AsyncStorage.setItem(BRIDGE_API_KEY_KEY, bridgeApiKey).catch(() => {});
+    AsyncStorage.setItem(CLIENT_ID_KEY, clientId).catch(() => {});
   },
 
   loadSavedAgents: async () => {

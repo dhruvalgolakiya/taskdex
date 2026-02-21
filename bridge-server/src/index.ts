@@ -2,37 +2,155 @@ import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import os from 'os';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 import { AgentManager } from './agent-manager';
-import { registerPushToken, getRegisteredTokenCount } from './push';
+import {
+  registerPushToken,
+  getRegisteredTokenCount,
+  getRegisteredClientCount,
+  removeClientPushTokens,
+} from './push';
 
-const PORT = 3001;
+const PORT = Number(process.env.PORT || 3001);
+const CONFIG_DIR = path.join(os.homedir(), '.pylon');
+const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
+
+interface BridgeConfig {
+  apiKey: string;
+}
+
+interface ClientSession {
+  ws: WebSocket;
+  authenticated: boolean;
+  clientId: string | null;
+  connectedAt: number;
+  remoteAddress: string;
+}
+
+function generateApiKey(): string {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+function loadOrCreateConfig(): BridgeConfig {
+  try {
+    if (fs.existsSync(CONFIG_PATH)) {
+      const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+      const parsed = JSON.parse(raw) as Partial<BridgeConfig>;
+      if (typeof parsed.apiKey === 'string' && parsed.apiKey.length > 0) {
+        return { apiKey: parsed.apiKey };
+      }
+    }
+  } catch (err) {
+    console.warn('[config] Failed to read existing config, regenerating:', err);
+  }
+
+  const apiKey = generateApiKey();
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify({ apiKey }, null, 2), { encoding: 'utf8', mode: 0o600 });
+  console.log('\n[auth] Generated bridge API key for first start.');
+  console.log(`[auth] Saved to ${CONFIG_PATH}`);
+  console.log(`[auth] API key: ${apiKey}\n`);
+  return { apiKey };
+}
+
+function getLocalIP(): string {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name] ?? []) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+function extractAuthKey(req: express.Request): string | null {
+  const header = req.header('authorization');
+  if (header?.startsWith('Bearer ')) {
+    return header.slice(7).trim();
+  }
+  const queryKey = req.query.key;
+  if (typeof queryKey === 'string' && queryKey.trim()) {
+    return queryKey.trim();
+  }
+  return null;
+}
+
+const config = loadOrCreateConfig();
+
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
+const clients = new Map<WebSocket, ClientSession>();
 
-// Track connected mobile clients
-const clients = new Set<WebSocket>();
+function getConnectedAuthenticatedCount(): number {
+  let count = 0;
+  for (const session of clients.values()) {
+    if (session.authenticated) count += 1;
+  }
+  return count;
+}
 
-// Broadcast to all connected clients
 function broadcast(agentId: string, event: string, data: unknown) {
   const message = JSON.stringify({ type: 'stream', agentId, event, data });
-  for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+  for (const session of clients.values()) {
+    if (!session.authenticated) continue;
+    if (session.ws.readyState === WebSocket.OPEN) {
+      session.ws.send(message);
     }
   }
 }
 
 const manager = new AgentManager(broadcast);
+const startedAt = Date.now();
 
-// Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', agents: manager.listAgents().length, pushTokens: getRegisteredTokenCount() });
+app.get('/health', (req, res) => {
+  const key = extractAuthKey(req);
+  if (!key || key !== config.apiKey) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
+  res.json({
+    status: 'ok',
+    uptimeMs: Date.now() - startedAt,
+    agents: manager.listAgents().length,
+    connectedClients: getConnectedAuthenticatedCount(),
+    pushClients: getRegisteredClientCount(),
+    pushTokens: getRegisteredTokenCount(),
+    system: {
+      hostname: os.hostname(),
+      platform: process.platform,
+      arch: process.arch,
+      nodeVersion: process.version,
+      cpus: os.cpus().length,
+      totalMemory: os.totalmem(),
+      freeMemory: os.freemem(),
+    },
+  });
 });
 
-wss.on('connection', (ws) => {
-  console.log('Mobile client connected');
-  clients.add(ws);
+wss.on('connection', (ws, req) => {
+  const remoteAddress = req.socket.remoteAddress || 'unknown';
+  const session: ClientSession = {
+    ws,
+    authenticated: false,
+    clientId: null,
+    connectedAt: Date.now(),
+    remoteAddress,
+  };
+  clients.set(ws, session);
+  console.log(`Client connected from ${remoteAddress}`);
+
+  const authTimeout = setTimeout(() => {
+    if (!session.authenticated && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'error', error: 'Authentication required' }));
+      ws.close(4001, 'Authentication required');
+    }
+  }, 10000);
 
   ws.on('message', async (raw) => {
     let msg: { action: string; params?: Record<string, unknown>; requestId?: string };
@@ -52,6 +170,29 @@ wss.on('connection', (ws) => {
     const replyError = (error: string) => {
       ws.send(JSON.stringify({ type: 'error', action, requestId, error }));
     };
+
+    if (!session.authenticated) {
+      if (action !== 'auth') {
+        replyError('Unauthenticated: first message must be auth');
+        ws.close(4001, 'Unauthenticated');
+        return;
+      }
+
+      const key = typeof params.key === 'string' ? params.key : '';
+      const requestedClientId = typeof params.clientId === 'string' ? params.clientId.trim() : '';
+      if (!key || key !== config.apiKey) {
+        replyError('Invalid API key');
+        ws.close(4001, 'Invalid API key');
+        return;
+      }
+
+      session.authenticated = true;
+      session.clientId = requestedClientId || crypto.randomUUID();
+      clearTimeout(authTimeout);
+      console.log(`Authenticated client ${session.clientId} (${remoteAddress})`);
+      reply({ ok: true, clientId: session.clientId });
+      return;
+    }
 
     try {
       switch (action) {
@@ -101,7 +242,11 @@ wss.on('connection', (ws) => {
 
         case 'register_push_token': {
           const { token } = params as { token: string };
-          registerPushToken(token);
+          if (!session.clientId) {
+            replyError('Client is missing an id');
+            break;
+          }
+          registerPushToken(session.clientId, token);
           reply({ ok: true });
           break;
         }
@@ -123,27 +268,20 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-    console.log('Mobile client disconnected');
+    clearTimeout(authTimeout);
+    if (session.clientId) {
+      removeClientPushTokens(session.clientId);
+    }
     clients.delete(ws);
+    console.log(`Client disconnected (${session.clientId || 'unauthenticated'})`);
   });
 });
 
-// Get local IP for display
-function getLocalIP(): string {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name] ?? []) {
-      if (iface.family === 'IPv4' && !iface.internal) {
-        return iface.address;
-      }
-    }
-  }
-  return '127.0.0.1';
-}
-
 server.listen(PORT, '0.0.0.0', () => {
   const ip = getLocalIP();
-  console.log(`\n  Codex Bridge Server running`);
+  console.log('\n  Codex Bridge Server running');
   console.log(`  Local:   ws://localhost:${PORT}`);
-  console.log(`  Network: ws://${ip}:${PORT}\n`);
+  console.log(`  Network: ws://${ip}:${PORT}`);
+  console.log(`  Config:  ${CONFIG_PATH}`);
+  console.log(`  API key: ${config.apiKey}\n`);
 });

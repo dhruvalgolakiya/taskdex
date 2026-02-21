@@ -68,6 +68,12 @@ interface ThreadRecordInput {
 
 interface BridgeSettingInput {
   bridgeUrl: string;
+  apiKey?: string;
+}
+
+interface BridgeSettingsResult {
+  bridgeUrl: string;
+  apiKey: string;
 }
 
 export async function fetchThreadMessages(
@@ -151,23 +157,39 @@ export async function fetchWorkspaceGraph(): Promise<AgentWorkspace[] | null> {
 }
 
 export async function persistBridgeSetting(input: BridgeSettingInput): Promise<void> {
-  if (!convexClient) return;
   try {
+    const current = await convexClient.query(api.persistence.getSettings, { id: 'default' });
+    const currentPreferences = (current?.preferences && typeof current.preferences === 'object')
+      ? (current.preferences as Record<string, unknown>)
+      : {};
+    const apiKey = input.apiKey !== undefined
+      ? input.apiKey
+      : (typeof currentPreferences.apiKey === 'string' ? currentPreferences.apiKey : '');
+
     await convexClient.mutation(api.persistence.saveSettings, {
       id: 'default',
       bridgeUrl: input.bridgeUrl,
-      preferences: {},
+      preferences: {
+        ...currentPreferences,
+        apiKey,
+      },
     });
   } catch {
     // Best-effort persistence; local state remains source of truth if network fails.
   }
 }
 
-export async function fetchBridgeSetting(): Promise<string | null> {
-  if (!convexClient) return null;
+export async function fetchBridgeSetting(): Promise<BridgeSettingsResult | null> {
   try {
     const settings = await convexClient.query(api.persistence.getSettings, { id: 'default' });
-    return settings?.bridgeUrl || null;
+    if (!settings) return null;
+    const preferences = settings.preferences && typeof settings.preferences === 'object'
+      ? (settings.preferences as Record<string, unknown>)
+      : {};
+    return {
+      bridgeUrl: settings.bridgeUrl || '',
+      apiKey: typeof preferences.apiKey === 'string' ? preferences.apiKey : '',
+    };
   } catch {
     return null;
   }

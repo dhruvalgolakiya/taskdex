@@ -91,24 +91,24 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 ### 2.1 API Key Auth
 
-- [ ] Bridge generates a random API key on first start, prints it to terminal
-- [ ] Save API key to `~/.pylon/config.json` on bridge machine
-- [ ] Mobile enters API key during bridge setup (one-time)
-- [ ] WebSocket handshake: first message must be `{ action: 'auth', params: { key: '...' } }`
-- [ ] Bridge rejects and disconnects clients that fail auth
-- [ ] Store API key in mobile's Convex settings (or SecureStore)
+- [x] Bridge generates a random API key on first start, prints it to terminal
+- [x] Save API key to `~/.pylon/config.json` on bridge machine
+- [x] Mobile enters API key during bridge setup (one-time)
+- [x] WebSocket handshake: first message must be `{ action: 'auth', params: { key: '...' } }`
+- [x] Bridge rejects and disconnects clients that fail auth
+- [x] Store API key in mobile's Convex settings (or SecureStore)
 
 ### 2.2 Client Scoping
 
-- [ ] Bridge tracks authenticated clients with a clientId
-- [ ] Push tokens scoped per client (don't blast all tokens)
-- [ ] Agent events still broadcast to all authenticated clients (single-user tool, but prevents random access)
+- [x] Bridge tracks authenticated clients with a clientId
+- [x] Push tokens scoped per client (don't blast all tokens)
+- [x] Agent events still broadcast to all authenticated clients (single-user tool, but prevents random access)
 
 ### 2.3 Bridge Status Endpoint
 
-- [ ] `GET /health` requires API key as Bearer token or query param
-- [ ] Returns: uptime, agent count, connected clients, system info
-- [ ] Mobile shows bridge health in settings screen
+- [x] `GET /health` requires API key as Bearer token or query param
+- [x] Returns: uptime, agent count, connected clients, system info
+- [x] Mobile shows bridge health in settings screen
 
 ---
 

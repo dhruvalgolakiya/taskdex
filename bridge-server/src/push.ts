@@ -15,21 +15,41 @@ interface PushMessage {
   data?: Record<string, unknown>;
 }
 
-const pushTokens = new Set<string>();
+const clientPushTokens = new Map<string, Set<string>>();
 
-export function registerPushToken(token: string) {
+export function registerPushToken(clientId: string, token: string) {
+  if (!clientId) return;
   if (token && (token.startsWith('ExponentPushToken[') || token.startsWith('ExpoPushToken['))) {
-    pushTokens.add(token);
-    console.log(`  📱 Push token registered: ${token.slice(0, 30)}...`);
+    const existing = clientPushTokens.get(clientId) || new Set<string>();
+    existing.add(token);
+    clientPushTokens.set(clientId, existing);
+    console.log(`  📱 Push token registered for ${clientId.slice(0, 8)}: ${token.slice(0, 30)}...`);
   }
 }
 
-export function removePushToken(token: string) {
-  pushTokens.delete(token);
+export function removePushToken(clientId: string, token: string) {
+  const existing = clientPushTokens.get(clientId);
+  if (!existing) return;
+  existing.delete(token);
+  if (existing.size === 0) {
+    clientPushTokens.delete(clientId);
+  }
+}
+
+export function removeClientPushTokens(clientId: string) {
+  clientPushTokens.delete(clientId);
 }
 
 export function getRegisteredTokenCount(): number {
-  return pushTokens.size;
+  let total = 0;
+  for (const tokens of clientPushTokens.values()) {
+    total += tokens.size;
+  }
+  return total;
+}
+
+export function getRegisteredClientCount(): number {
+  return clientPushTokens.size;
 }
 
 export async function sendPushNotification(opts: {
@@ -42,26 +62,28 @@ export async function sendPushNotification(opts: {
   priority?: 'default' | 'normal' | 'high';
   replyHint?: string;
 }) {
-  if (pushTokens.size === 0) return;
+  if (clientPushTokens.size === 0) return;
 
   const messages: PushMessage[] = [];
-  for (const token of pushTokens) {
-    messages.push({
-      to: token,
-      title: opts.title,
-      body: opts.body,
-      subtitle: opts.subtitle,
-      sound: 'default',
-      categoryId: opts.categoryId || 'thread-reply',
-      channelId: opts.channelId || 'thread-updates',
-      priority: opts.priority || 'high',
-      data: {
-        kind: 'thread_complete',
-        agentId: opts.agentId || '',
-        canReply: true,
-        replyHint: opts.replyHint || 'Tap and hold to reply',
-      },
-    });
+  for (const tokens of clientPushTokens.values()) {
+    for (const token of tokens) {
+      messages.push({
+        to: token,
+        title: opts.title,
+        body: opts.body,
+        subtitle: opts.subtitle,
+        sound: 'default',
+        categoryId: opts.categoryId || 'thread-reply',
+        channelId: opts.channelId || 'thread-updates',
+        priority: opts.priority || 'high',
+        data: {
+          kind: 'thread_complete',
+          agentId: opts.agentId || '',
+          canReply: true,
+          replyHint: opts.replyHint || 'Tap and hold to reply',
+        },
+      });
+    }
   }
 
   try {
