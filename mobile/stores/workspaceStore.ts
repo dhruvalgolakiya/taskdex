@@ -22,6 +22,7 @@ interface WorkspaceStore {
     cwd: string;
     firstThreadAgentId: string;
     firstThreadTitle?: string;
+    makeActive?: boolean;
   }) => string;
   addThreadToWorkspace: (params: {
     workspaceId: string;
@@ -84,7 +85,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     persist(workspaces, workspaceId);
   },
 
-  createWorkspace: ({ name, model, cwd, firstThreadAgentId, firstThreadTitle }) => {
+  createWorkspace: ({ name, model, cwd, firstThreadAgentId, firstThreadTitle, makeActive = true }) => {
     const threadTitle = firstThreadTitle?.trim() || 'Thread 1';
     const now = Date.now();
     const workspace: AgentWorkspace = {
@@ -99,8 +100,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     };
 
     const workspaces = [...get().workspaces, workspace];
-    set({ workspaces, activeWorkspaceId: workspace.id });
-    persist(workspaces, workspace.id);
+    const nextActiveWorkspaceId = makeActive ? workspace.id : (get().activeWorkspaceId || workspace.id);
+    set({ workspaces, activeWorkspaceId: nextActiveWorkspaceId });
+    persist(workspaces, nextActiveWorkspaceId);
     return workspace.id;
   },
 

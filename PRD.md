@@ -74,8 +74,8 @@ Currently messages are in AsyncStorage (fragile, single device). Agent state is 
 - [x] Save workspace/thread structure to Convex on create
 - [x] On app launch: load from Convex instead of AsyncStorage
 - [x] Keep AsyncStorage as offline fallback only
-- [ ] On WebSocket connect: reconcile Convex data with live bridge `list_agents`
-- [ ] Save bridge URL to Convex settings (syncs across devices)
+- [x] On WebSocket connect: reconcile Convex data with live bridge `list_agents`
+- [x] Save bridge URL to Convex settings (syncs across devices)
 
 ### 1.4 Cross-Device Sync
 

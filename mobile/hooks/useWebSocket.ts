@@ -4,7 +4,9 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { useAgentStore } from '../stores/agentStore';
+import { useWorkspaceStore } from '../stores/workspaceStore';
 import { startAgentActivity, updateAgentActivity, stopAgentActivity, isLiveActivitySupported } from './useLiveActivity';
+import { persistThreadRecord, persistWorkspaceRecord } from '../lib/convexClient';
 import type { BridgeRequest, BridgeResponse, Agent } from '../types';
 
 let requestCounter = 0;
@@ -156,10 +158,84 @@ function syncAgents() {
   const requestId = `req_${++requestCounter}`;
   globalPending.set(requestId, (res) => {
     if (res.type === 'response' && Array.isArray(res.data)) {
-      useAgentStore.getState().mergeWithBridgeAgents(res.data as Agent[]);
+      const bridgeAgents = res.data as Agent[];
+      useAgentStore.getState().mergeWithBridgeAgents(bridgeAgents);
+      void reconcileConvexWithBridgeAgents(bridgeAgents);
     }
   });
   globalWs.send(JSON.stringify({ action: 'list_agents', requestId }));
+}
+
+async function reconcileConvexWithBridgeAgents(bridgeAgents: Agent[]) {
+  if (!bridgeAgents.length) return;
+
+  const workspaceStore = useWorkspaceStore.getState();
+  const { bridgeUrl } = useAgentStore.getState();
+
+  for (const agent of bridgeAgents) {
+    const currentWorkspaces = workspaceStore.workspaces;
+    let workspace = currentWorkspaces.find((entry) =>
+      entry.threads.some((thread) => thread.id === agent.id));
+
+    if (!workspace) {
+      workspace = currentWorkspaces.find((entry) =>
+        entry.name === agent.name && entry.cwd === agent.cwd);
+    }
+
+    if (!workspace) {
+      const createdAt = Date.now();
+      const workspaceId = workspaceStore.createWorkspace({
+        name: agent.name,
+        model: agent.model,
+        cwd: agent.cwd,
+        firstThreadAgentId: agent.id,
+        firstThreadTitle: 'Thread 1',
+        makeActive: false,
+      });
+      await persistWorkspaceRecord({
+        id: workspaceId,
+        bridgeUrl,
+        name: agent.name,
+        model: agent.model,
+        cwd: agent.cwd,
+        createdAt,
+      });
+      await persistThreadRecord({
+        id: agent.id,
+        workspaceId,
+        title: 'Thread 1',
+        bridgeAgentId: agent.id,
+        createdAt,
+      });
+      continue;
+    }
+
+    if (!workspace.threads.some((thread) => thread.id === agent.id)) {
+      const title = `Thread ${workspace.threads.length + 1}`;
+      workspaceStore.addThreadToWorkspace({
+        workspaceId: workspace.id,
+        threadAgentId: agent.id,
+        title,
+        makeActive: false,
+      });
+      await persistThreadRecord({
+        id: agent.id,
+        workspaceId: workspace.id,
+        title,
+        bridgeAgentId: agent.id,
+        createdAt: Date.now(),
+      });
+    }
+
+    await persistWorkspaceRecord({
+      id: workspace.id,
+      bridgeUrl,
+      name: workspace.name,
+      model: workspace.model,
+      cwd: workspace.cwd,
+      createdAt: workspace.createdAt,
+    });
+  }
 }
 
 export function sendRequest(action: string, params?: Record<string, unknown>): Promise<BridgeResponse> {

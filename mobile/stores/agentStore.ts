@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Agent, AgentMessage, AgentStatus, MessageType, QueuedMessage } from '../types';
-import { persistMessage } from '../lib/convexClient';
+import { fetchBridgeSetting, persistBridgeSetting, persistMessage } from '../lib/convexClient';
 
 const BRIDGE_URL_KEY = 'codex_bridge_url';
 const AGENTS_KEY = 'codex_agents';
@@ -111,10 +111,18 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   setBridgeUrl: (url) => {
     AsyncStorage.setItem(BRIDGE_URL_KEY, url);
+    void persistBridgeSetting({ bridgeUrl: url });
     set({ bridgeUrl: url });
   },
 
   loadBridgeUrl: async () => {
+    const convexBridgeUrl = await fetchBridgeSetting();
+    if (convexBridgeUrl) {
+      set({ bridgeUrl: convexBridgeUrl, urlLoaded: true });
+      AsyncStorage.setItem(BRIDGE_URL_KEY, convexBridgeUrl).catch(() => {});
+      return;
+    }
+
     const saved = await AsyncStorage.getItem(BRIDGE_URL_KEY);
     if (saved) {
       set({ bridgeUrl: saved, urlLoaded: true });
