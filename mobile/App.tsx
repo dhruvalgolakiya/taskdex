@@ -548,7 +548,7 @@ function WorkspaceScreen({
       await Notifications.scheduleNotificationAsync({
         content: {
           title: 'Test notification',
-          body: 'Codex mobile notifications are working.',
+          body: 'Nexa mobile notifications are working.',
           sound: true,
           data: { kind: 'test' },
           ...(Platform.OS === 'android' ? { channelId: 'thread-updates' } : {}),
@@ -689,7 +689,7 @@ function WorkspaceScreen({
             <Ionicons name="chatbubbles-outline" size={16} color={colors.background} />
           </Pressable>
           <View>
-            <Text style={s.headerTitle}>Codex</Text>
+            <Text style={s.headerTitle}>Nexa</Text>
             <Text style={s.topSub} numberOfLines={1}>
               {activeWorkspace ? `${activeWorkspace.name} · ${activeThread?.title || 'No thread'}` : 'No workspace selected'}
             </Text>
