@@ -38,6 +38,21 @@ export const saveMessage = mutation({
   },
 });
 
+export const deleteMessage = mutation({
+  args: {
+    id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("messages")
+      .withIndex("by_message_id", (q) => q.eq("id", args.id))
+      .unique();
+    if (!existing) return { ok: false };
+    await ctx.db.delete(existing._id);
+    return { ok: true };
+  },
+});
+
 export const saveThread = mutation({
   args: {
     id: v.string(),
@@ -183,5 +198,24 @@ export const getSettings = query({
       .query("settings")
       .withIndex("by_setting_id", (q) => q.eq("id", args.id))
       .unique();
+  },
+});
+
+export const searchMessages = query({
+  args: {
+    query: v.string(),
+    threadId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const query = args.query.trim();
+    if (query.length < 2) return [];
+
+    return await ctx.db
+      .query("messages")
+      .withSearchIndex("search_text", (q) => {
+        const search = q.search("text", query);
+        return args.threadId ? search.eq("threadId", args.threadId) : search;
+      })
+      .take(50);
   },
 });

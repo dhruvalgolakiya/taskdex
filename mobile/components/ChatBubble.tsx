@@ -1,6 +1,9 @@
-import React, { memo, useMemo } from 'react';
-import { View, Text, StyleSheet, Linking } from 'react-native';
+import React, { memo, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, Linking, Pressable } from 'react-native';
 import Markdown from 'react-native-markdown-display';
+import * as Clipboard from 'expo-clipboard';
+import SyntaxHighlighter from 'react-native-syntax-highlighter';
+import { atomOneDark, atomOneLight } from 'react-syntax-highlighter/styles/hljs';
 import type { AgentMessage } from '../types';
 import type { Palette } from '../theme';
 import { typography } from '../theme';
@@ -12,7 +15,17 @@ interface Props {
 
 function ChatBubbleBase({ message, colors }: Props) {
   const styles = useMemo(() => createStyles(colors), [colors]);
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  const [outputExpanded, setOutputExpanded] = useState(false);
   const userForeground = colors.background;
+  const syntaxTheme = useMemo(
+    () => (isDarkPalette(colors) ? atomOneDark : atomOneLight),
+    [colors],
+  );
+  const markdownRules = useMemo(
+    () => createMarkdownRules(styles, syntaxTheme),
+    [styles, syntaxTheme],
+  );
   const markdownStyles = useMemo(() => createMarkdownStyles(colors), [colors]);
   const markdownStylesMuted = useMemo(
     () => ({ ...createMarkdownStyles(colors), body: { color: colors.textSecondary } }),
@@ -47,6 +60,12 @@ function ChatBubbleBase({ message, colors }: Props) {
 
   const isUser = message.role === 'user';
   const msgType = message.type || (isUser ? 'user' : 'agent');
+  const outputLines = useMemo(() => (message.text || '').split('\n'), [message.text]);
+  const collapsedOutputText = useMemo(
+    () => outputLines.slice(0, 5).join('\n'),
+    [outputLines],
+  );
+  const hasCollapsedOutput = outputLines.length > 5;
   const formattedText = useMemo(() => {
     if (msgType === 'file_change') return toCodeBlock(message.text, 'diff');
     return message.text || '';
@@ -76,12 +95,26 @@ function ChatBubbleBase({ message, colors }: Props) {
         <View style={styles.row}>
           <View style={styles.bubbleThinking}>
             <Text style={styles.typeLabel}>Thinking</Text>
-            {shouldRenderMarkdown ? (
-              <Markdown style={markdownStylesMuted as any} onLinkPress={handleLinkPress}>
-                {formattedText}
-              </Markdown>
+            {!thinkingExpanded ? (
+              <Pressable style={styles.collapseHeader} onPress={() => setThinkingExpanded(true)}>
+                <Text style={styles.collapseHint}>Show</Text>
+                <Text style={styles.textThinking} numberOfLines={2}>
+                  {compactTerminalLine(message.text, 160)}
+                </Text>
+              </Pressable>
             ) : (
-              <Text style={styles.textThinking}>{message.text}</Text>
+              <>
+                <Pressable style={styles.collapseHeader} onPress={() => setThinkingExpanded(false)}>
+                  <Text style={styles.collapseHint}>Hide</Text>
+                </Pressable>
+                {shouldRenderMarkdown ? (
+                  <Markdown style={markdownStylesMuted as any} onLinkPress={handleLinkPress} rules={markdownRules as any}>
+                    {formattedText}
+                  </Markdown>
+                ) : (
+                  <Text style={styles.textThinking}>{message.text}</Text>
+                )}
+              </>
             )}
           </View>
         </View>
@@ -104,9 +137,14 @@ function ChatBubbleBase({ message, colors }: Props) {
       return (
         <View style={styles.row}>
           <View style={styles.terminalOutput}>
-            <Text style={styles.terminalOutputText} numberOfLines={3}>
-              {compactTerminalLine(message.text, 220)}
+            <Text style={styles.terminalOutputText}>
+              {(outputExpanded || !hasCollapsedOutput || message.streaming) ? message.text : collapsedOutputText}
             </Text>
+            {hasCollapsedOutput && !message.streaming && (
+              <Pressable onPress={() => setOutputExpanded((value) => !value)}>
+                <Text style={styles.collapseHint}>{outputExpanded ? 'Show less' : 'Show more'}</Text>
+              </Pressable>
+            )}
             {message.streaming && <Text style={styles.terminalCursor}>█</Text>}
           </View>
         </View>
@@ -118,7 +156,7 @@ function ChatBubbleBase({ message, colors }: Props) {
           <View style={styles.bubbleFile}>
             <Text style={styles.typeLabel}>File Change</Text>
             {shouldRenderMarkdown ? (
-              <Markdown style={markdownStyles as any} onLinkPress={handleLinkPress}>
+              <Markdown style={markdownStyles as any} onLinkPress={handleLinkPress} rules={markdownRules as any}>
                 {formattedText}
               </Markdown>
             ) : (
@@ -133,7 +171,7 @@ function ChatBubbleBase({ message, colors }: Props) {
         <View style={styles.row}>
           <View style={styles.bubbleAgent}>
             {shouldRenderMarkdown ? (
-              <Markdown style={markdownStyles as any} onLinkPress={handleLinkPress}>
+              <Markdown style={markdownStyles as any} onLinkPress={handleLinkPress} rules={markdownRules as any}>
                 {formattedText}
               </Markdown>
             ) : (
@@ -161,6 +199,65 @@ function compactTerminalLine(text: string, max = 120) {
   const normalized = (text || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
   return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
+}
+
+function extractFenceLanguage(node: any): string {
+  const raw = typeof node?.sourceInfo === 'string'
+    ? node.sourceInfo
+    : typeof node?.info === 'string'
+      ? node.info
+      : '';
+  const language = raw.trim().split(/\s+/)[0]?.toLowerCase();
+  return language || 'text';
+}
+
+function extractFenceContent(node: any): string {
+  if (typeof node?.content === 'string') return node.content;
+  if (typeof node?.children?.[0]?.content === 'string') return node.children[0].content;
+  return '';
+}
+
+function isDarkPalette(colors: Palette): boolean {
+  const c = colors.background.replace('#', '');
+  if (c.length < 6) return false;
+  const r = parseInt(c.slice(0, 2), 16);
+  const g = parseInt(c.slice(2, 4), 16);
+  const b = parseInt(c.slice(4, 6), 16);
+  const luminance = (0.299 * r) + (0.587 * g) + (0.114 * b);
+  return luminance < 140;
+}
+
+function createMarkdownRules(styles: ReturnType<typeof createStyles>, syntaxTheme: Record<string, unknown>) {
+  return {
+    fence: (node: any) => {
+      const language = extractFenceLanguage(node);
+      const content = extractFenceContent(node);
+      return (
+        <View key={node.key} style={styles.codeBlockShell}>
+          <View style={styles.codeHeader}>
+            <Text style={styles.codeHeaderText}>{language}</Text>
+            <Pressable
+              style={styles.codeCopyButton}
+              onPress={() => {
+                void Clipboard.setStringAsync(content);
+              }}
+            >
+              <Text style={styles.codeCopyText}>Copy</Text>
+            </Pressable>
+          </View>
+          <SyntaxHighlighter
+            highlighter="hljs"
+            language={language}
+            style={syntaxTheme as any}
+            fontFamily={typography.mono}
+            fontSize={12}
+          >
+            {content}
+          </SyntaxHighlighter>
+        </View>
+      );
+    },
+  };
 }
 
 const createStyles = (colors: Palette) => StyleSheet.create({
@@ -331,6 +428,53 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
     fontFamily: typography.mono,
+  },
+  collapseHeader: {
+    marginBottom: 4,
+    gap: 4,
+  },
+  collapseHint: {
+    color: colors.accent,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: typography.semibold,
+  },
+  codeBlockShell: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: colors.surfaceSubtle,
+    overflow: 'hidden',
+    marginVertical: 6,
+  },
+  codeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  codeHeaderText: {
+    color: colors.textMuted,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    fontFamily: typography.semibold,
+    letterSpacing: 0.6,
+  },
+  codeCopyButton: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  codeCopyText: {
+    color: colors.accent,
+    fontSize: 11,
+    fontFamily: typography.semibold,
   },
 });
 

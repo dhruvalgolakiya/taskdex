@@ -39,6 +39,8 @@ interface AgentStore {
   clearQueuedMessages: (agentId: string) => void;
   setAgentMessages: (agentId: string, messages: AgentMessage[]) => void;
   prependAgentMessages: (agentId: string, messages: AgentMessage[]) => void;
+  clearAgentMessages: (agentId: string) => void;
+  removeMessage: (agentId: string, message: AgentMessage) => void;
   appendMessage: (agentId: string, message: AgentMessage) => void;
   appendDelta: (agentId: string, itemId: string, delta: string, msgType: MessageType) => void;
   finalizeItem: (agentId: string, itemId: string, text: string, msgType: MessageType) => void;
@@ -392,6 +394,27 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     const agents = get().agents.map((a) =>
       a.id === agentId ? { ...a, messages: [...messages, ...a.messages] } : a,
     );
+    set({ agents });
+    saveAgents(agents);
+  },
+
+  clearAgentMessages: (agentId) => {
+    const agents = get().agents.map((a) =>
+      a.id === agentId ? { ...a, messages: [] } : a,
+    );
+    set({ agents });
+    saveAgents(agents);
+  },
+
+  removeMessage: (agentId, message) => {
+    const agents = get().agents.map((a) => {
+      if (a.id !== agentId) return a;
+      const messages = a.messages.filter((entry) => {
+        if (message._itemId) return entry._itemId !== message._itemId;
+        return !(entry.timestamp === message.timestamp && entry.role === message.role && entry.text === message.text);
+      });
+      return { ...a, messages };
+    });
     set({ agents });
     saveAgents(agents);
   },

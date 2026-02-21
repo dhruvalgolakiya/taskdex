@@ -116,31 +116,37 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 ### 3.1 Better Message Rendering
 
-- [ ] Syntax highlighting for code blocks (detect language from markdown fences)
-- [ ] Collapsible thinking blocks (collapsed by default, tap to expand)
-- [ ] Collapsible command output (show first 5 lines, "Show more" button)
-- [ ] Copy button on code blocks
+- [x] Syntax highlighting for code blocks (detect language from markdown fences)
+- [x] Collapsible thinking blocks (collapsed by default, tap to expand)
+- [x] Collapsible command output (show first 5 lines, "Show more" button)
+- [x] Copy button on code blocks
 - [ ] Tap filename in file_change messages to view file (needs Phase 5 file browser)
+  - Blocked: Phase 5 file browser and navigation route are not implemented yet.
+  - Need: Implement Phase 5 file tree + viewer, then wire file_change path taps to route into that screen.
 
 ### 3.2 Message Search
 
-- [ ] Search bar in chat header
-- [ ] Search messages in current thread (local filter)
-- [ ] Search across all threads (Convex full-text index on `messages.text`)
-- [ ] Tap result to scroll to message
+- [x] Search bar in chat header
+- [x] Search messages in current thread (local filter)
+- [x] Search across all threads (Convex full-text index on `messages.text`)
+- [x] Tap result to scroll to message
 
 ### 3.3 Message Actions
 
-- [ ] Long-press context menu: Copy, Share, Retry, Delete
-- [ ] Copy copies message text to clipboard
-- [ ] Retry resends the user message to the agent
-- [ ] Delete removes from Convex + local store
+- [x] Long-press context menu: Copy, Share, Retry, Delete
+- [x] Copy copies message text to clipboard
+- [x] Retry resends the user message to the agent
+- [x] Delete removes from Convex + local store
 
 ### 3.4 Input Improvements
 
-- [ ] Slash commands: `/stop` (interrupt), `/clear` (clear thread display)
+- [x] Slash commands: `/stop` (interrupt), `/clear` (clear thread display)
 - [ ] `@filename` mention — bridge action `list_files` returns cwd contents for autocomplete
 - [ ] Voice input via expo-speech (mic button)
+  - Blocked: `@filename` autocomplete depends on `list_files` bridge action and input-level suggestion UI.
+  - Need: Implement bridge `list_files` action + message input suggestion dropdown insertion flow.
+  - Blocked: `expo-speech` is text-to-speech only, not speech-to-text.
+  - Need: Replace requirement with speech-recognition package/API choice, then wire mic capture into message input.
 
 ---
 

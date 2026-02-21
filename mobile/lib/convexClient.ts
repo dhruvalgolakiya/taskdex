@@ -38,6 +38,16 @@ export async function persistMessage(threadId: string, message: AgentMessage): P
   }
 }
 
+export async function deletePersistedMessage(threadId: string, message: AgentMessage): Promise<void> {
+  try {
+    await convexClient.mutation(api.persistence.deleteMessage, {
+      id: toMessageId(threadId, message),
+    });
+  } catch {
+    // Best-effort delete; local state is updated first.
+  }
+}
+
 interface FetchThreadMessagesParams {
   beforeTimestamp?: number;
   limit?: number;

@@ -13,6 +13,7 @@ import {
   ScrollView,
   useColorScheme,
   AppState,
+  Share,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -21,6 +22,7 @@ import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
 import { ConvexProvider, useQuery } from 'convex/react';
+import * as Clipboard from 'expo-clipboard';
 import {
   Manrope_400Regular,
   Manrope_500Medium,
@@ -44,6 +46,7 @@ import { api } from './convex/_generated/api';
 import {
   convexClient,
   fetchThreadMessages,
+  deletePersistedMessage,
   persistWorkspaceRecord,
   persistThreadRecord,
 } from './lib/convexClient';
@@ -151,6 +154,8 @@ function WorkspaceScreen({
   const prependQueuedMessage = useAgentStore((state) => state.prependQueuedMessage);
   const setAgentMessages = useAgentStore((state) => state.setAgentMessages);
   const prependAgentMessages = useAgentStore((state) => state.prependAgentMessages);
+  const clearAgentMessages = useAgentStore((state) => state.clearAgentMessages);
+  const removeMessage = useAgentStore((state) => state.removeMessage);
   const agentIdsSignature = useAgentStore((state) => state.agents.map((agent) => agent.id).sort().join('|'));
   const {
     workspaces,
@@ -198,6 +203,13 @@ function WorkspaceScreen({
   const [savingModel, setSavingModel] = useState(false);
   const [queueCollapsed, setQueueCollapsed] = useState(false);
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchScope, setSearchScope] = useState<'thread' | 'all'>('thread');
+  const [pendingSearchTarget, setPendingSearchTarget] = useState<{
+    threadId: string;
+    timestamp: number;
+    itemId?: string;
+  } | null>(null);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
@@ -215,6 +227,12 @@ function WorkspaceScreen({
   const liveThreadMessages = useQuery(
     api.persistence.getMessages,
     activeThreadId ? { threadId: activeThreadId, limit: 50 } : 'skip',
+  );
+  const globalSearchResults = useQuery(
+    api.persistence.searchMessages,
+    searchScope === 'all' && searchQuery.trim().length >= 2
+      ? { query: searchQuery.trim() }
+      : 'skip',
   );
   const activeAgent = useAgentStore(
     useCallback((state) => {
@@ -870,6 +888,23 @@ function WorkspaceScreen({
     ]);
   };
 
+  const handleInputSend = useCallback((text: string) => {
+    if (!activeAgent) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+
+    if (trimmed === '/stop') {
+      void interruptAgent(activeAgent.id);
+      return;
+    }
+    if (trimmed === '/clear') {
+      clearAgentMessages(activeAgent.id);
+      return;
+    }
+
+    void sendMessage(activeAgent.id, trimmed);
+  }, [activeAgent, clearAgentMessages, interruptAgent, sendMessage]);
+
   const canSend = !!activeAgent
     && connectionStatus === 'connected'
     && activeAgent.status !== 'error';
@@ -880,14 +915,16 @@ function WorkspaceScreen({
     () => activeAgent?.messages.filter((msg) => msg.role === 'agent' && msg.type && msg.type !== 'agent').length || 0,
     [activeAgent],
   );
+  const normalizedSearch = searchQuery.trim().toLowerCase();
   const visibleMessages = useMemo(() => {
     if (!activeAgent) return [];
-    if (showActivity) return activeAgent.messages;
-    return activeAgent.messages.filter((msg) => {
+    const base = showActivity ? activeAgent.messages : activeAgent.messages.filter((msg) => {
       if (msg.role === 'user') return true;
       return !msg.type || msg.type === 'agent';
     });
-  }, [activeAgent, showActivity]);
+    if (searchScope !== 'thread' || !normalizedSearch) return base;
+    return base.filter((msg) => (msg.text || '').toLowerCase().includes(normalizedSearch));
+  }, [activeAgent, normalizedSearch, searchScope, showActivity]);
   const hasAnyMessages = (activeAgent?.messages.length || 0) > 0;
   const typingLabel = useMemo(() => {
     if (!activeAgent || activeAgent.status !== 'working') return 'Working';
@@ -897,14 +934,82 @@ function WorkspaceScreen({
     if (lastAgentMessage?.type === 'command' || lastAgentMessage?.type === 'command_output') return 'Running';
     return 'Typing';
   }, [activeAgent]);
+  const handleMessageActions = useCallback((message: AgentMessage) => {
+    if (!activeAgent) return;
+    Alert.alert('Message actions', undefined, [
+      {
+        text: 'Copy',
+        onPress: () => {
+          void Clipboard.setStringAsync(message.text || '');
+        },
+      },
+      {
+        text: 'Share',
+        onPress: () => {
+          void Share.share({ message: message.text || '' });
+        },
+      },
+      ...(message.role === 'user'
+        ? [{
+          text: 'Retry',
+          onPress: () => {
+            if (message.text?.trim()) {
+              void sendMessage(activeAgent.id, message.text.trim());
+            }
+          },
+        }]
+        : []),
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          removeMessage(activeAgent.id, message);
+          void deletePersistedMessage(activeAgent.id, message);
+        },
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [activeAgent, removeMessage, sendMessage]);
   const renderChatItem = useCallback(
-    ({ item }: { item: AgentMessage }) => <ChatBubble message={item} colors={colors} />,
-    [colors],
+    ({ item }: { item: AgentMessage }) => (
+      <Pressable onLongPress={() => handleMessageActions(item)} delayLongPress={280}>
+        <ChatBubble message={item} colors={colors} />
+      </Pressable>
+    ),
+    [colors, handleMessageActions],
   );
   const keyExtractor = useCallback(
     (item: AgentMessage) => `${activeAgent?.id ?? 'agent'}_${item._itemId ?? `${item.role}_${item.timestamp}`}`,
     [activeAgent?.id],
   );
+
+  const handleOpenSearchResult = useCallback((result: {
+    threadId: string;
+    timestamp: number;
+    itemId?: string;
+  }) => {
+    const workspace = workspaces.find((entry) =>
+      entry.threads.some((thread) => thread.id === result.threadId));
+    if (!workspace) return;
+    setActiveWorkspace(workspace.id);
+    setActiveThread(workspace.id, result.threadId);
+    setShowActivity(true);
+    setSearchScope('thread');
+    setSearchQuery('');
+    setPendingSearchTarget(result);
+  }, [setActiveThread, setActiveWorkspace, workspaces]);
+
+  useEffect(() => {
+    if (!pendingSearchTarget) return;
+    if (pendingSearchTarget.threadId !== activeThreadId) return;
+    const index = visibleMessages.findIndex((message) =>
+      (pendingSearchTarget.itemId && message._itemId === pendingSearchTarget.itemId)
+      || message.timestamp === pendingSearchTarget.timestamp,
+    );
+    if (index < 0) return;
+    listRef.current?.scrollToIndex({ index, animated: true });
+    setPendingSearchTarget(null);
+  }, [activeThreadId, pendingSearchTarget, visibleMessages]);
 
   useEffect(() => {
     if (!activeAgent?.messages.length) return;
@@ -950,11 +1055,56 @@ function WorkspaceScreen({
         </View>
       </View>
 
+      <View style={s.searchRow}>
+        <Ionicons name="search" size={14} color={colors.textMuted} />
+        <TextInput
+          style={s.searchInput}
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+          placeholder={searchScope === 'thread' ? 'Search this thread' : 'Search all threads'}
+          placeholderTextColor={colors.textMuted}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <Pressable
+          style={s.searchScopeChip}
+          onPress={() => setSearchScope((scope) => (scope === 'thread' ? 'all' : 'thread'))}
+        >
+          <Text style={s.searchScopeText}>{searchScope === 'thread' ? 'Thread' : 'All'}</Text>
+        </Pressable>
+      </View>
+
       <Text style={[s.metaInline, { color: statusColor }]} numberOfLines={1}>
         {activeWorkspace
           ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}`
           : getConnectionLabel(connectionStatus)}
       </Text>
+
+      {searchScope === 'all' && searchQuery.trim().length >= 2 && (
+        <View style={s.searchResultsPanel}>
+          {(globalSearchResults || []).slice(0, 8).map((result: any, index: number) => (
+            <Pressable
+              key={`${result.id || result.threadId}_${result.timestamp}_${index}`}
+              style={s.searchResultRow}
+              onPress={() => handleOpenSearchResult({
+                threadId: result.threadId,
+                timestamp: result.timestamp,
+                itemId: result.itemId,
+              })}
+            >
+              <Text style={s.searchResultTitle} numberOfLines={1}>
+                {(result.text || '').replace(/\s+/g, ' ').trim() || '(empty message)'}
+              </Text>
+              <Text style={s.searchResultMeta} numberOfLines={1}>
+                {result.threadId}
+              </Text>
+            </Pressable>
+          ))}
+          {globalSearchResults && globalSearchResults.length === 0 && (
+            <Text style={s.searchEmptyText}>No cross-thread results</Text>
+          )}
+        </View>
+      )}
 
       <View style={s.chatPanel}>
         {!activeAgent ? (
@@ -1044,6 +1194,12 @@ function WorkspaceScreen({
             maxToRenderPerBatch={8}
             updateCellsBatchingPeriod={32}
             scrollEventThrottle={16}
+            onScrollToIndexFailed={(info) => {
+              listRef.current?.scrollToOffset({
+                offset: Math.max(0, info.averageItemLength * info.index),
+                animated: true,
+              });
+            }}
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           />
@@ -1079,7 +1235,7 @@ function WorkspaceScreen({
       )}
 
       <MessageInput
-        onSend={(text) => activeAgent && sendMessage(activeAgent.id, text)}
+        onSend={handleInputSend}
         onInterrupt={() => activeAgent && interruptAgent(activeAgent.id)}
         isWorking={isAgentWorking}
         queueCount={queuedCount}
@@ -1606,6 +1762,74 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     color: colors.textMuted,
     fontSize: 10,
     fontFamily: typography.mono,
+  },
+  searchRow: {
+    marginTop: 8,
+    marginHorizontal: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+    paddingHorizontal: 10,
+    minHeight: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontFamily: typography.medium,
+    paddingVertical: 0,
+  },
+  searchScopeChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: colors.surface,
+  },
+  searchScopeText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontFamily: typography.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  searchResultsPanel: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+    overflow: 'hidden',
+  },
+  searchResultRow: {
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: 2,
+  },
+  searchResultTitle: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontFamily: typography.medium,
+  },
+  searchResultMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: typography.mono,
+  },
+  searchEmptyText: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontFamily: typography.medium,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
   },
 
   sidebarOverlay: {

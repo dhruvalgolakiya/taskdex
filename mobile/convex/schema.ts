@@ -58,7 +58,11 @@ export default defineSchema({
   })
     .index("by_message_id", ["id"])
     .index("by_threadId", ["threadId"])
-    .index("by_thread_timestamp", ["threadId", "timestamp"]),
+    .index("by_thread_timestamp", ["threadId", "timestamp"])
+    .searchIndex("search_text", {
+      searchField: "text",
+      filterFields: ["threadId"],
+    }),
 
   settings: defineTable({
     id: v.string(),
