@@ -20,7 +20,7 @@ import { registerRootComponent } from 'expo';
 import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
-import { ConvexProvider, ConvexReactClient } from 'convex/react';
+import { ConvexProvider } from 'convex/react';
 import {
   Manrope_400Regular,
   Manrope_500Medium,
@@ -40,6 +40,7 @@ import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import type { AgentMessage, QueuedMessage } from './types';
+import { convexClient } from './lib/convexClient';
 import {
   getConnectionColors,
   getPalette,
@@ -1166,9 +1167,6 @@ function WorkspaceScreen({
     </KeyboardAvoidingView>
   );
 }
-
-const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
-const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
 
 function AppContent() {
   const systemTheme = useColorScheme();

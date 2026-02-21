@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Agent, AgentMessage, AgentStatus, MessageType, QueuedMessage } from '../types';
+import { persistMessage } from '../lib/convexClient';
 
 const BRIDGE_URL_KEY = 'codex_bridge_url';
 const AGENTS_KEY = 'codex_agents';
@@ -356,6 +357,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     );
     set({ agents });
     saveAgents(agents);
+    void persistMessage(agentId, message);
   },
 
   appendDelta: (agentId, itemId, delta, msgType) => {
@@ -396,6 +398,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   finalizeItem: (agentId, itemId, text, msgType) => {
+    let finalizedMessage: AgentMessage | null = null;
     const agents = get().agents.map((a) => {
       if (a.id !== agentId) return a;
       const messages = [...a.messages];
@@ -412,23 +415,29 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
           type: msgType,
           streaming: false,
         };
+        finalizedMessage = messages[keepIdx];
         // Guard against legacy duplicate fragments for the same item.
         for (let i = matchingIndexes.length - 1; i >= 1; i -= 1) {
           messages.splice(matchingIndexes[i], 1);
         }
       } else if (text) {
-        messages.push({
+        const nextMessage: AgentMessage = {
           role: 'agent',
           type: msgType,
           text,
           timestamp: Date.now(),
           _itemId: itemId,
           streaming: false,
-        });
+        };
+        messages.push(nextMessage);
+        finalizedMessage = nextMessage;
       }
       return { ...a, messages };
     });
     set({ agents });
     saveAgents(agents);
+    if (finalizedMessage) {
+      void persistMessage(agentId, finalizedMessage);
+    }
   },
 }));
