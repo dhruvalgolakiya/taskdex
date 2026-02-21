@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
 const roleValidator = v.union(v.literal("user"), v.literal("agent"));
@@ -82,5 +82,36 @@ export const saveWorkspace = mutation({
     }
 
     return await ctx.db.insert("workspaces", args);
+  },
+});
+
+export const getMessages = query({
+  args: {
+    threadId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("messages")
+      .withIndex("by_thread_timestamp", (q) => q.eq("threadId", args.threadId))
+      .collect();
+  },
+});
+
+export const getThreads = query({
+  args: {
+    workspaceId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("threads")
+      .withIndex("by_workspaceId", (q) => q.eq("workspaceId", args.workspaceId))
+      .collect();
+  },
+});
+
+export const getWorkspaces = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("workspaces").withIndex("by_createdAt").collect();
   },
 });
