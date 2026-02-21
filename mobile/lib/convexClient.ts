@@ -49,6 +49,23 @@ interface FetchThreadMessagesResult {
   oldestTimestamp: number | null;
 }
 
+interface WorkspaceRecordInput {
+  id: string;
+  bridgeUrl: string;
+  name: string;
+  model: string;
+  cwd: string;
+  createdAt: number;
+}
+
+interface ThreadRecordInput {
+  id: string;
+  workspaceId: string;
+  title: string;
+  bridgeAgentId: string;
+  createdAt: number;
+}
+
 export async function fetchThreadMessages(
   threadId: string,
   params: FetchThreadMessagesParams = {},
@@ -76,5 +93,23 @@ export async function fetchThreadMessages(
     };
   } catch {
     return null;
+  }
+}
+
+export async function persistWorkspaceRecord(input: WorkspaceRecordInput): Promise<void> {
+  if (!convexClient) return;
+  try {
+    await convexClient.mutation(api.persistence.saveWorkspace, input);
+  } catch {
+    // Best-effort persistence; local state remains source of truth if network fails.
+  }
+}
+
+export async function persistThreadRecord(input: ThreadRecordInput): Promise<void> {
+  if (!convexClient) return;
+  try {
+    await convexClient.mutation(api.persistence.saveThread, input);
+  } catch {
+    // Best-effort persistence; local state remains source of truth if network fails.
   }
 }

@@ -40,7 +40,12 @@ import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import type { AgentMessage, QueuedMessage } from './types';
-import { convexClient, fetchThreadMessages } from './lib/convexClient';
+import {
+  convexClient,
+  fetchThreadMessages,
+  persistWorkspaceRecord,
+  persistThreadRecord,
+} from './lib/convexClient';
 import {
   getConnectionColors,
   getPalette,
@@ -499,12 +504,28 @@ function WorkspaceScreen({
     setCreatingWorkspace(true);
     try {
       const agent = await createAgent(name, model, cwd);
-      createWorkspace({
+      const workspaceId = createWorkspace({
         name,
         model,
         cwd,
         firstThreadAgentId: agent.id,
         firstThreadTitle: 'Thread 1',
+      });
+      const createdAt = Date.now();
+      await persistWorkspaceRecord({
+        id: workspaceId,
+        bridgeUrl,
+        name,
+        model,
+        cwd,
+        createdAt,
+      });
+      await persistThreadRecord({
+        id: agent.id,
+        workspaceId,
+        title: 'Thread 1',
+        bridgeAgentId: agent.id,
+        createdAt,
       });
       setShowCreateWorkspace(false);
       setNewWorkspaceName('');
@@ -532,6 +553,13 @@ function WorkspaceScreen({
         threadAgentId: agent.id,
         title,
         makeActive: true,
+      });
+      await persistThreadRecord({
+        id: agent.id,
+        workspaceId: activeWorkspace.id,
+        title,
+        bridgeAgentId: agent.id,
+        createdAt: Date.now(),
       });
       setShowCreateThread(false);
       setNewThreadTitle('');
