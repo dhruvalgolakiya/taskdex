@@ -65,8 +65,8 @@ Currently messages are in AsyncStorage (fragile, single device). Agent state is 
 
 - [x] On `appendMessage` (user sends): also call `saveMessage` mutation
 - [x] On `finalizeItem` (agent message complete): also call `saveMessage` mutation
-- [ ] On thread open: load messages from Convex, fall back to local store
-- [ ] Paginate: load latest 50, scroll up loads more
+- [x] On thread open: load messages from Convex, fall back to local store
+- [x] Paginate: load latest 50, scroll up loads more
 - [ ] Stop storing full message arrays in AsyncStorage (keep only agent metadata)
 
 ### 1.3 Workspace & Agent Persistence

@@ -37,3 +37,44 @@ export async function persistMessage(threadId: string, message: AgentMessage): P
     // Best-effort persistence; local state remains source of truth if network fails.
   }
 }
+
+interface FetchThreadMessagesParams {
+  beforeTimestamp?: number;
+  limit?: number;
+}
+
+interface FetchThreadMessagesResult {
+  messages: AgentMessage[];
+  hasMore: boolean;
+  oldestTimestamp: number | null;
+}
+
+export async function fetchThreadMessages(
+  threadId: string,
+  params: FetchThreadMessagesParams = {},
+): Promise<FetchThreadMessagesResult | null> {
+  if (!convexClient) return null;
+  try {
+    const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
+    const rows = await convexClient.query(api.persistence.getMessages, {
+      threadId,
+      beforeTimestamp: params.beforeTimestamp,
+      limit,
+    });
+    const messages = rows.map((row) => ({
+      role: row.role,
+      type: row.type,
+      text: row.text,
+      timestamp: row.timestamp,
+      _itemId: row.itemId,
+      streaming: row.streaming,
+    }));
+    return {
+      messages,
+      hasMore: rows.length === limit,
+      oldestTimestamp: messages[0]?.timestamp ?? null,
+    };
+  } catch {
+    return null;
+  }
+}

@@ -32,6 +32,8 @@ interface AgentStore {
   removeQueuedMessage: (agentId: string, queueId: string) => void;
   moveQueuedMessage: (agentId: string, queueId: string, direction: -1 | 1) => void;
   clearQueuedMessages: (agentId: string) => void;
+  setAgentMessages: (agentId: string, messages: AgentMessage[]) => void;
+  prependAgentMessages: (agentId: string, messages: AgentMessage[]) => void;
   appendMessage: (agentId: string, message: AgentMessage) => void;
   appendDelta: (agentId: string, itemId: string, delta: string, msgType: MessageType) => void;
   finalizeItem: (agentId: string, itemId: string, text: string, msgType: MessageType) => void;
@@ -346,6 +348,23 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   clearQueuedMessages: (agentId) => {
     const agents = get().agents.map((a) =>
       a.id === agentId ? { ...a, queuedMessages: [] } : a,
+    );
+    set({ agents });
+    saveAgents(agents);
+  },
+
+  setAgentMessages: (agentId, messages) => {
+    const agents = get().agents.map((a) =>
+      a.id === agentId ? { ...a, messages } : a,
+    );
+    set({ agents });
+    saveAgents(agents);
+  },
+
+  prependAgentMessages: (agentId, messages) => {
+    if (!messages.length) return;
+    const agents = get().agents.map((a) =>
+      a.id === agentId ? { ...a, messages: [...messages, ...a.messages] } : a,
     );
     set({ agents });
     saveAgents(agents);

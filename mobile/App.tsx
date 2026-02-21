@@ -40,7 +40,7 @@ import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import type { AgentMessage, QueuedMessage } from './types';
-import { convexClient } from './lib/convexClient';
+import { convexClient, fetchThreadMessages } from './lib/convexClient';
 import {
   getConnectionColors,
   getPalette,
@@ -111,6 +111,7 @@ function WorkspaceScreen({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [showActivity, setShowActivity] = useState(false);
   const threadScrollState = useRef<Record<string, { offset: number; atBottom: boolean }>>({});
+  const threadPagingState = useRef<Record<string, { oldestTimestamp: number | null; hasMore: boolean; loading: boolean }>>({});
 
   const connectionStatus = useAgentStore((state) => state.connectionStatus);
   const agents = useAgentStore((state) => state.agents);
@@ -122,6 +123,8 @@ function WorkspaceScreen({
   const moveQueuedMessage = useAgentStore((state) => state.moveQueuedMessage);
   const clearQueuedMessages = useAgentStore((state) => state.clearQueuedMessages);
   const prependQueuedMessage = useAgentStore((state) => state.prependQueuedMessage);
+  const setAgentMessages = useAgentStore((state) => state.setAgentMessages);
+  const prependAgentMessages = useAgentStore((state) => state.prependAgentMessages);
   const agentIdsSignature = useAgentStore((state) => state.agents.map((agent) => agent.id).sort().join('|'));
   const {
     workspaces,
@@ -164,6 +167,7 @@ function WorkspaceScreen({
   const [modelInput, setModelInput] = useState('');
   const [savingModel, setSavingModel] = useState(false);
   const [queueCollapsed, setQueueCollapsed] = useState(false);
+  const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
@@ -233,6 +237,64 @@ function WorkspaceScreen({
 
     return () => clearTimeout(timer);
   }, [activeThreadId, activeAgent?.id, activeAgent?.messages.length]);
+
+  useEffect(() => {
+    if (!activeThreadId) return;
+    let cancelled = false;
+
+    const loadMessages = async () => {
+      const convexResult = await fetchThreadMessages(activeThreadId, { limit: 50 });
+      if (cancelled || !convexResult) return;
+
+      threadPagingState.current[activeThreadId] = {
+        oldestTimestamp: convexResult.oldestTimestamp,
+        hasMore: convexResult.hasMore,
+        loading: false,
+      };
+
+      if (convexResult.messages.length === 0) return;
+      setAgentMessages(activeThreadId, convexResult.messages);
+    };
+
+    void loadMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeThreadId, setAgentMessages]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!activeThreadId) return;
+    const currentState = threadPagingState.current[activeThreadId];
+    if (!currentState || !currentState.hasMore || currentState.loading || currentState.oldestTimestamp === null) return;
+
+    threadPagingState.current[activeThreadId] = { ...currentState, loading: true };
+    setLoadingMoreMessages(true);
+
+    try {
+      const olderResult = await fetchThreadMessages(activeThreadId, {
+        limit: 50,
+        beforeTimestamp: currentState.oldestTimestamp,
+      });
+
+      if (!olderResult || olderResult.messages.length === 0) {
+        threadPagingState.current[activeThreadId] = {
+          ...threadPagingState.current[activeThreadId],
+          hasMore: false,
+          loading: false,
+        };
+        return;
+      }
+
+      prependAgentMessages(activeThreadId, olderResult.messages);
+      threadPagingState.current[activeThreadId] = {
+        oldestTimestamp: olderResult.oldestTimestamp,
+        hasMore: olderResult.hasMore,
+        loading: false,
+      };
+    } finally {
+      setLoadingMoreMessages(false);
+    }
+  }, [activeThreadId, prependAgentMessages]);
 
   useEffect(() => {
     setShowActivity(false);
@@ -747,21 +809,30 @@ function WorkspaceScreen({
             data={visibleMessages}
             keyExtractor={keyExtractor}
             renderItem={renderChatItem}
-            ListHeaderComponent={activityCount > 0 ? (
-              <View style={s.thinkingToggleWrap}>
-                <Pressable
-                  style={s.thinkingToggleBtn}
-                  onPress={() => setShowActivity((current) => !current)}
-                >
-                  <Ionicons
-                    name={showActivity ? 'chevron-down' : 'chevron-forward'}
-                    size={14}
-                    color={colors.textSecondary}
-                  />
-                  <Text style={s.thinkingToggleText}>
-                    {showActivity ? `Hide activity (${activityCount})` : `Show activity (${activityCount})`}
-                  </Text>
-                </Pressable>
+            ListHeaderComponent={loadingMoreMessages || activityCount > 0 ? (
+              <View>
+                {loadingMoreMessages && (
+                  <View style={s.paginationLoadingWrap}>
+                    <Text style={s.paginationLoadingText}>Loading older messages...</Text>
+                  </View>
+                )}
+                {activityCount > 0 && (
+                  <View style={s.thinkingToggleWrap}>
+                    <Pressable
+                      style={s.thinkingToggleBtn}
+                      onPress={() => setShowActivity((current) => !current)}
+                    >
+                      <Ionicons
+                        name={showActivity ? 'chevron-down' : 'chevron-forward'}
+                        size={14}
+                        color={colors.textSecondary}
+                      />
+                      <Text style={s.thinkingToggleText}>
+                        {showActivity ? `Hide activity (${activityCount})` : `Show activity (${activityCount})`}
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
               </View>
             ) : null}
             ListEmptyComponent={!showActivity && activityCount > 0 ? (
@@ -792,6 +863,9 @@ function WorkspaceScreen({
                 };
               }
               setShowScrollToBottom((current) => (current === !isNearBottom ? current : !isNearBottom));
+              if (contentOffset.y <= 80) {
+                void loadOlderMessages();
+              }
             }}
             windowSize={9}
             initialNumToRender={12}
@@ -1534,6 +1608,15 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   chatListContent: {
     paddingVertical: 10,
     paddingBottom: 6,
+  },
+  paginationLoadingWrap: {
+    paddingHorizontal: 16,
+    marginBottom: 8,
+  },
+  paginationLoadingText: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontFamily: typography.medium,
   },
   thinkingToggleWrap: {
     paddingHorizontal: 16,

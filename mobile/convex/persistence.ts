@@ -88,12 +88,22 @@ export const saveWorkspace = mutation({
 export const getMessages = query({
   args: {
     threadId: v.string(),
+    beforeTimestamp: v.optional(v.number()),
+    limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const limit = Math.min(Math.max(args.limit ?? 200, 1), 200);
     return await ctx.db
       .query("messages")
-      .withIndex("by_thread_timestamp", (q) => q.eq("threadId", args.threadId))
-      .collect();
+      .withIndex("by_thread_timestamp", (q) => {
+        const scoped = q.eq("threadId", args.threadId);
+        return args.beforeTimestamp === undefined
+          ? scoped
+          : scoped.lt("timestamp", args.beforeTimestamp);
+      })
+      .order("desc")
+      .take(limit)
+      .then((rows) => rows.reverse());
   },
 });
 
