@@ -40,7 +40,7 @@ interface AgentStore {
 }
 
 function saveAgents(agents: Agent[]) {
-  const persisted = agents.map(({ activityLabel: _activityLabel, ...agent }) => agent);
+  const persisted = agents.map(({ activityLabel: _activityLabel, messages: _messages, ...agent }) => agent);
   AsyncStorage.setItem(AGENTS_KEY, JSON.stringify(persisted)).catch(() => {});
 }
 
@@ -127,13 +127,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     try {
       const saved = await AsyncStorage.getItem(AGENTS_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as Agent[];
+        const parsed = JSON.parse(saved) as Array<Partial<Agent>>;
         // Mark all loaded agents as stopped initially (bridge will update live ones)
         const agents = dedupeAgents(parsed.map((a) => ({
           ...a,
+          messages: Array.isArray(a.messages) ? a.messages : [],
           status: 'stopped' as AgentStatus,
           queuedMessages: normalizeQueuedMessages(a.queuedMessages),
-        })));
+        })) as Agent[]);
         set({ agents, agentsLoaded: true });
       } else {
         set({ agentsLoaded: true });
