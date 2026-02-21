@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "Nova Chat",
+    "slug": "nova-chat",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "scheme": "nova-chat",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSSupportsLiveActivities": true,
+        "NSSupportsLiveActivitiesFrequentUpdates": false
+      },
+      "entitlements": {},
+      "bundleIdentifier": "com.dhruvalg.novachat",
+      "appleTeamId": "V5FMGB2B26"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.dhruvalg.novachat"
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-notifications",
+      "expo-live-activity"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "86425b89-c877-443d-a185-066ecd19bc3e"
+      }
+    },
+    "owner": "dhruvalg"
+  }
+}
