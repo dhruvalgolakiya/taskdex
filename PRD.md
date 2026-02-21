@@ -51,7 +51,7 @@ Currently messages are in AsyncStorage (fragile, single device). Agent state is 
 
 - [x] Initialize Convex project in `convex/` directory
 - [x] Install `convex` + `convex-expo` in mobile app *(February 21, 2026: `convex-expo` is not published on npm; React Native integration uses `convex` directly.)*
-- [ ] Define schema:
+- [x] Define schema:
   - `bridges` — id, name, url, lastConnected
   - `workspaces` — id, bridgeUrl, name, model, cwd, createdAt
   - `threads` — id, workspaceId, title, bridgeAgentId, createdAt
