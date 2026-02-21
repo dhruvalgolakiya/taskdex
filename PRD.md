@@ -209,11 +209,11 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 6.1 Docker
 
-- [ ] `Dockerfile` for bridge server
-- [ ] `docker-compose.yml` with volume mounts for code directories
-- [ ] Environment variables: `PORT`, `API_KEY`, `CODEX_CWD`
-- [ ] Health check
-- [ ] Document in README
+- [x] `Dockerfile` for bridge server
+- [x] `docker-compose.yml` with volume mounts for code directories
+- [x] Environment variables: `PORT`, `API_KEY`, `CODEX_CWD`
+- [x] Health check
+- [x] Document in README
 
 ### 6.2 VPS Setup Guide
 

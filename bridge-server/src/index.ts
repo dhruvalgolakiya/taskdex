@@ -36,6 +36,11 @@ function generateApiKey(): string {
 }
 
 function loadOrCreateConfig(): BridgeConfig {
+  if (process.env.API_KEY && process.env.API_KEY.trim()) {
+    console.log('[auth] Using API key from API_KEY environment variable.');
+    return { apiKey: process.env.API_KEY.trim() };
+  }
+
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
@@ -215,10 +220,11 @@ wss.on('connection', (ws, req) => {
       switch (action) {
         case 'create_agent': {
           const { name, model, cwd } = params as { name: string; model: string; cwd: string };
+          const defaultCwd = process.env.CODEX_CWD || process.cwd();
           const agent = await manager.createAgent(
             name || 'Agent',
             model || 'gpt-5.1-codex',
-            cwd || process.cwd(),
+            cwd || defaultCwd,
           );
           reply(agent);
           break;
@@ -270,7 +276,8 @@ wss.on('connection', (ws, req) => {
 
         case 'list_files': {
           const { cwd, path: relativePath } = params as { cwd: string; path?: string };
-          const target = resolveWithinCwd(cwd || process.cwd(), relativePath);
+          const defaultCwd = process.env.CODEX_CWD || process.cwd();
+          const target = resolveWithinCwd(cwd || defaultCwd, relativePath);
           const entries = await fsPromises.readdir(target, { withFileTypes: true });
           const serialized = entries
             .map((entry) => ({
@@ -283,7 +290,7 @@ wss.on('connection', (ws, req) => {
               return a.name.localeCompare(b.name);
             });
           reply({
-            cwd: path.resolve(cwd || process.cwd()),
+            cwd: path.resolve(cwd || defaultCwd),
             path: relativePath || '.',
             entries: serialized,
           });
@@ -293,12 +300,13 @@ wss.on('connection', (ws, req) => {
         case 'read_file': {
           const { cwd, path: relativePath } = params as { cwd: string; path: string };
           if (!relativePath) throw new Error('path is required');
-          const target = resolveWithinCwd(cwd || process.cwd(), relativePath);
+          const defaultCwd = process.env.CODEX_CWD || process.cwd();
+          const target = resolveWithinCwd(cwd || defaultCwd, relativePath);
           const stat = await fsPromises.stat(target);
           if (!stat.isFile()) throw new Error('Target is not a file');
           const content = await fsPromises.readFile(target, 'utf8');
           reply({
-            cwd: path.resolve(cwd || process.cwd()),
+            cwd: path.resolve(cwd || defaultCwd),
             path: relativePath,
             content,
           });
