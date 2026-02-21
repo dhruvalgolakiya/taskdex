@@ -120,9 +120,7 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 - [x] Collapsible thinking blocks (collapsed by default, tap to expand)
 - [x] Collapsible command output (show first 5 lines, "Show more" button)
 - [x] Copy button on code blocks
-- [ ] Tap filename in file_change messages to view file (needs Phase 5 file browser)
-  - Blocked: Phase 5 file browser and navigation route are not implemented yet.
-  - Need: Implement Phase 5 file tree + viewer, then wire file_change path taps to route into that screen.
+- [x] Tap filename in file_change messages to view file (needs Phase 5 file browser)
 
 ### 3.2 Message Search
 
@@ -189,10 +187,10 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 - [x] New bridge action: `list_files { cwd, path }` — returns directory listing
 - [x] New bridge action: `read_file { cwd, path }` — returns file contents
-- [ ] File tree screen accessible from workspace
-- [ ] Syntax-highlighted file viewer
-- [ ] Mark files modified by agent (tracked from file_change events)
-- [ ] Navigate from file_change message → file viewer
+- [x] File tree screen accessible from workspace
+- [x] Syntax-highlighted file viewer
+- [x] Mark files modified by agent (tracked from file_change events)
+- [x] Navigate from file_change message → file viewer
 
 ### 5.2 Git Integration
 

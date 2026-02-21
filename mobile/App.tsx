@@ -43,6 +43,8 @@ import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import type { AgentMessage, QueuedMessage } from './types';
 import { api } from './convex/_generated/api';
+import SyntaxHighlighter from 'react-native-syntax-highlighter';
+import { atomOneDark, atomOneLight } from 'react-syntax-highlighter/styles/hljs';
 import {
   convexClient,
   fetchThreadMessages,
@@ -94,6 +96,20 @@ function getConnectionLabel(status: string) {
   if (status === 'connected') return 'Connected to bridge';
   if (status === 'connecting') return 'Connecting to bridge...';
   return 'Disconnected from bridge';
+}
+
+function guessLanguageFromPath(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
+  if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript';
+  if (lower.endsWith('.json')) return 'json';
+  if (lower.endsWith('.md')) return 'markdown';
+  if (lower.endsWith('.py')) return 'python';
+  if (lower.endsWith('.sh')) return 'bash';
+  if (lower.endsWith('.yml') || lower.endsWith('.yaml')) return 'yaml';
+  if (lower.endsWith('.css')) return 'css';
+  if (lower.endsWith('.html')) return 'html';
+  return 'text';
 }
 
 function messageIdentity(message: AgentMessage): string {
@@ -210,6 +226,14 @@ function WorkspaceScreen({
     timestamp: number;
     itemId?: string;
   } | null>(null);
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const [fileBrowserPath, setFileBrowserPath] = useState('.');
+  const [fileEntries, setFileEntries] = useState<Array<{ name: string; path: string; type: string }>>([]);
+  const [loadingFileEntries, setLoadingFileEntries] = useState(false);
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
+  const [selectedFileContent, setSelectedFileContent] = useState('');
+  const [loadingFileContent, setLoadingFileContent] = useState(false);
+  const [fileBrowserError, setFileBrowserError] = useState<string | null>(null);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
@@ -926,6 +950,73 @@ function WorkspaceScreen({
       .map((entry) => (entry.type === 'directory' ? `${entry.name}/` : entry.name));
   }, [activeWorkspace?.cwd]);
 
+  const modifiedFiles = useMemo(() => {
+    const files = new Set<string>();
+    for (const message of activeAgent?.messages || []) {
+      if (message.type !== 'file_change') continue;
+      const candidate = (message.text || '').split('\n')[0]?.trim();
+      if (candidate) files.add(candidate);
+    }
+    return files;
+  }, [activeAgent?.messages]);
+
+  const loadDirectoryEntries = useCallback(async (relativePath: string) => {
+    if (!activeWorkspace?.cwd) return;
+    setLoadingFileEntries(true);
+    setFileBrowserError(null);
+    try {
+      const res = await sendRequest('list_files', { cwd: activeWorkspace.cwd, path: relativePath });
+      if (res.type !== 'response' || !res.data) {
+        throw new Error(res.error || 'Unable to list files');
+      }
+      const entries = ((res.data as { entries?: Array<{ name: string; path: string; type: string }> }).entries || []);
+      setFileEntries(entries);
+      setFileBrowserPath(relativePath || '.');
+    } catch (err: any) {
+      setFileBrowserError(err?.message || 'Failed to load files');
+      setFileEntries([]);
+    } finally {
+      setLoadingFileEntries(false);
+    }
+  }, [activeWorkspace?.cwd]);
+
+  const openFilePath = useCallback(async (relativePath: string) => {
+    if (!activeWorkspace?.cwd) return;
+    setLoadingFileContent(true);
+    setFileBrowserError(null);
+    try {
+      const res = await sendRequest('read_file', { cwd: activeWorkspace.cwd, path: relativePath });
+      if (res.type !== 'response' || !res.data) {
+        throw new Error(res.error || 'Unable to read file');
+      }
+      const payload = res.data as { content?: string; path?: string };
+      setSelectedFilePath(payload.path || relativePath);
+      setSelectedFileContent(payload.content || '');
+      setShowFileBrowser(true);
+    } catch (err: any) {
+      setFileBrowserError(err?.message || 'Failed to open file');
+    } finally {
+      setLoadingFileContent(false);
+    }
+  }, [activeWorkspace?.cwd]);
+
+  const handleOpenFileBrowser = useCallback(() => {
+    setShowFileBrowser(true);
+    setSelectedFilePath(null);
+    setSelectedFileContent('');
+    void loadDirectoryEntries('.');
+  }, [loadDirectoryEntries]);
+
+  const handleFileChangePress = useCallback((path: string) => {
+    const normalized = path.replace(/\\/g, '/');
+    const slashIndex = normalized.lastIndexOf('/');
+    const parent = slashIndex > 0 ? normalized.slice(0, slashIndex) : '.';
+    setShowFileBrowser(true);
+    setSelectedFilePath(null);
+    void loadDirectoryEntries(parent);
+    void openFilePath(path);
+  }, [loadDirectoryEntries, openFilePath]);
+
   const canSend = !!activeAgent
     && connectionStatus === 'connected'
     && activeAgent.status !== 'error';
@@ -994,10 +1085,10 @@ function WorkspaceScreen({
   const renderChatItem = useCallback(
     ({ item }: { item: AgentMessage }) => (
       <Pressable onLongPress={() => handleMessageActions(item)} delayLongPress={280}>
-        <ChatBubble message={item} colors={colors} />
+        <ChatBubble message={item} colors={colors} onFilePress={handleFileChangePress} />
       </Pressable>
     ),
-    [colors, handleMessageActions],
+    [colors, handleFileChangePress, handleMessageActions],
   );
   const keyExtractor = useCallback(
     (item: AgentMessage) => `${activeAgent?.id ?? 'agent'}_${item._itemId ?? `${item.role}_${item.timestamp}`}`,
@@ -1063,6 +1154,13 @@ function WorkspaceScreen({
               {connectionStatus === 'connected' ? 'Live' : 'Offline'}
             </Text>
           </View>
+          <Pressable
+            onPress={handleOpenFileBrowser}
+            style={({ pressed }) => [s.headerPillBtn, !activeWorkspace && s.smallActionBtnDisabled, pressed && s.pressed]}
+            disabled={!activeWorkspace}
+          >
+            <Text style={s.headerPillText}>Files</Text>
+          </Pressable>
           <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}>
             <Text style={s.headerPillText}>Settings</Text>
           </Pressable>
@@ -1460,6 +1558,83 @@ function WorkspaceScreen({
                 disabled={creatingThread || !activeWorkspace}
               >
                 <Text style={s.primaryText}>{creatingThread ? 'Creating...' : 'Create'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showFileBrowser} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Files</Text>
+            <Text style={s.fileBrowserPathLabel}>{selectedFilePath || fileBrowserPath}</Text>
+
+            {selectedFilePath ? (
+              <ScrollView style={s.fileViewerWrap}>
+                <SyntaxHighlighter
+                  highlighter="hljs"
+                  language={guessLanguageFromPath(selectedFilePath)}
+                  style={(resolvedTheme === 'dark' ? atomOneDark : atomOneLight) as any}
+                  fontFamily={typography.mono}
+                  fontSize={12}
+                >
+                  {selectedFileContent}
+                </SyntaxHighlighter>
+              </ScrollView>
+            ) : (
+              <ScrollView style={s.fileListWrap}>
+                {loadingFileEntries && <Text style={s.fileHint}>Loading files...</Text>}
+                {!loadingFileEntries && fileEntries.map((entry) => (
+                  <Pressable
+                    key={entry.path}
+                    style={s.fileRow}
+                    onPress={() => {
+                      if (entry.type === 'directory') {
+                        void loadDirectoryEntries(entry.path);
+                        return;
+                      }
+                      void openFilePath(entry.path);
+                    }}
+                  >
+                    <Text style={s.fileRowName} numberOfLines={1}>
+                      {entry.type === 'directory' ? `[DIR] ${entry.name}` : `[FILE] ${entry.name}`}
+                    </Text>
+                    {modifiedFiles.has(entry.path) && <Text style={s.fileRowBadge}>Modified</Text>}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )}
+
+            {!!fileBrowserError && <Text style={s.fileErrorText}>{fileBrowserError}</Text>}
+
+            <View style={s.modalActions}>
+              <Pressable
+                style={s.cancelBtn}
+                onPress={() => {
+                  if (selectedFilePath) {
+                    setSelectedFilePath(null);
+                    setSelectedFileContent('');
+                  } else {
+                    setShowFileBrowser(false);
+                  }
+                }}
+              >
+                <Text style={s.cancelText}>{selectedFilePath ? 'Back' : 'Close'}</Text>
+              </Pressable>
+              <Pressable
+                style={[s.primaryBtn, loadingFileContent && s.smallActionBtnDisabled]}
+                onPress={() => {
+                  if (selectedFilePath) {
+                    setSelectedFilePath(null);
+                    setSelectedFileContent('');
+                    return;
+                  }
+                  void loadDirectoryEntries(fileBrowserPath);
+                }}
+                disabled={loadingFileContent}
+              >
+                <Text style={s.primaryText}>{loadingFileContent ? 'Opening...' : (selectedFilePath ? 'List' : 'Refresh')}</Text>
               </Pressable>
             </View>
           </View>
@@ -2153,6 +2328,65 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     padding: 16,
+  },
+  fileBrowserModal: {
+    maxHeight: '88%',
+  },
+  fileBrowserPathLabel: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginBottom: 8,
+    fontFamily: typography.mono,
+  },
+  fileListWrap: {
+    maxHeight: 360,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  fileViewerWrap: {
+    maxHeight: 360,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  fileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: 8,
+  },
+  fileRowName: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontFamily: typography.medium,
+  },
+  fileRowBadge: {
+    color: colors.accent,
+    fontSize: 10,
+    fontFamily: typography.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  fileHint: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontFamily: typography.medium,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  fileErrorText: {
+    marginTop: 8,
+    color: '#c23a3a',
+    fontSize: 12,
+    fontFamily: typography.medium,
   },
   modalTitle: {
     color: colors.textPrimary,

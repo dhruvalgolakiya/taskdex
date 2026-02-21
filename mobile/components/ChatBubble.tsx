@@ -11,9 +11,10 @@ import { typography } from '../theme';
 interface Props {
   message: AgentMessage;
   colors: Palette;
+  onFilePress?: (path: string) => void;
 }
 
-function ChatBubbleBase({ message, colors }: Props) {
+function ChatBubbleBase({ message, colors, onFilePress }: Props) {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [outputExpanded, setOutputExpanded] = useState(false);
@@ -70,6 +71,10 @@ function ChatBubbleBase({ message, colors }: Props) {
     if (msgType === 'file_change') return toCodeBlock(message.text, 'diff');
     return message.text || '';
   }, [message.text, msgType]);
+  const filePath = useMemo(
+    () => (msgType === 'file_change' ? extractLikelyFilePath(message.text) : null),
+    [message.text, msgType],
+  );
   const shouldRenderMarkdown = !message.streaming;
 
   const handleLinkPress = (url: string) => {
@@ -162,6 +167,11 @@ function ChatBubbleBase({ message, colors }: Props) {
             ) : (
               <Text style={styles.textFile}>{message.text}</Text>
             )}
+            {filePath && onFilePress && (
+              <Pressable style={styles.fileActionButton} onPress={() => onFilePress(filePath)}>
+                <Text style={styles.fileActionText}>Open file</Text>
+              </Pressable>
+            )}
           </View>
         </View>
       );
@@ -199,6 +209,14 @@ function compactTerminalLine(text: string, max = 120) {
   const normalized = (text || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
   return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
+}
+
+function extractLikelyFilePath(text: string): string | null {
+  const candidate = (text || '').split('\n')[0]?.trim();
+  if (!candidate) return null;
+  if (candidate.includes('/') || candidate.includes('\\')) return candidate;
+  if (candidate.includes('.')) return candidate;
+  return null;
 }
 
 function extractFenceLanguage(node: any): string {
@@ -472,6 +490,21 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     borderColor: colors.border,
   },
   codeCopyText: {
+    color: colors.accent,
+    fontSize: 11,
+    fontFamily: typography.semibold,
+  },
+  fileActionButton: {
+    marginTop: 8,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: colors.surface,
+  },
+  fileActionText: {
     color: colors.accent,
     fontSize: 11,
     fontFamily: typography.semibold,
