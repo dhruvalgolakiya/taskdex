@@ -272,7 +272,7 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 ### 9.1 Performance
 
 - [ ] Optimize FlatList rendering (getItemLayout, windowSize tuning)
-- [ ] Stop saving full message arrays to AsyncStorage on every finalize
+- [x] Stop saving full message arrays to AsyncStorage on every finalize
 - [ ] Debounce store updates during rapid streaming deltas
 - [ ] Lazy load workspace data
 
