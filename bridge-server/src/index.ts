@@ -5,6 +5,7 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { promises as fsPromises } from 'fs';
 import { AgentManager } from './agent-manager';
 import {
   registerPushToken,
@@ -77,6 +78,15 @@ function extractAuthKey(req: express.Request): string | null {
     return queryKey.trim();
   }
   return null;
+}
+
+function resolveWithinCwd(cwd: string, relativePath?: string): string {
+  const safeCwd = path.resolve(cwd || process.cwd());
+  const resolved = path.resolve(safeCwd, relativePath || '.');
+  if (resolved === safeCwd || resolved.startsWith(`${safeCwd}${path.sep}`)) {
+    return resolved;
+  }
+  throw new Error('Path escapes cwd');
 }
 
 const config = loadOrCreateConfig();
@@ -248,6 +258,43 @@ wss.on('connection', (ws, req) => {
           }
           registerPushToken(session.clientId, token);
           reply({ ok: true });
+          break;
+        }
+
+        case 'list_files': {
+          const { cwd, path: relativePath } = params as { cwd: string; path?: string };
+          const target = resolveWithinCwd(cwd || process.cwd(), relativePath);
+          const entries = await fsPromises.readdir(target, { withFileTypes: true });
+          const serialized = entries
+            .map((entry) => ({
+              name: entry.name,
+              path: path.join(relativePath || '.', entry.name),
+              type: entry.isDirectory() ? 'directory' : 'file',
+            }))
+            .sort((a, b) => {
+              if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+              return a.name.localeCompare(b.name);
+            });
+          reply({
+            cwd: path.resolve(cwd || process.cwd()),
+            path: relativePath || '.',
+            entries: serialized,
+          });
+          break;
+        }
+
+        case 'read_file': {
+          const { cwd, path: relativePath } = params as { cwd: string; path: string };
+          if (!relativePath) throw new Error('path is required');
+          const target = resolveWithinCwd(cwd || process.cwd(), relativePath);
+          const stat = await fsPromises.stat(target);
+          if (!stat.isFile()) throw new Error('Target is not a file');
+          const content = await fsPromises.readFile(target, 'utf8');
+          reply({
+            cwd: path.resolve(cwd || process.cwd()),
+            path: relativePath,
+            content,
+          });
           break;
         }
 

@@ -1,5 +1,5 @@
-import React, { useMemo, useState } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet } from 'react-native';
+import React, { useMemo, useState, useEffect } from 'react';
+import { View, Text, TextInput, Pressable, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import type { Palette } from '../theme';
 import { typography } from '../theme';
@@ -11,6 +11,7 @@ interface Props {
   queueCount?: number;
   disabled?: boolean;
   bottomInset?: number;
+  onResolveFileMentions?: (query: string) => Promise<string[]>;
   colors: Palette;
 }
 
@@ -21,10 +22,46 @@ export function MessageInput({
   queueCount = 0,
   disabled,
   bottomInset = 0,
+  onResolveFileMentions,
   colors,
 }: Props) {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [text, setText] = useState('');
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  useEffect(() => {
+    if (!onResolveFileMentions) return;
+    const mentionMatch = text.match(/@([^\s@]*)$/);
+    const query = mentionMatch?.[1] || '';
+    if (!mentionMatch || query.length < 1) {
+      setSuggestions([]);
+      setLoadingSuggestions(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingSuggestions(true);
+    onResolveFileMentions(query)
+      .then((result) => {
+        if (!cancelled) setSuggestions(result.slice(0, 8));
+      })
+      .catch(() => {
+        if (!cancelled) setSuggestions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSuggestions(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [onResolveFileMentions, text]);
+
+  const applyMentionSuggestion = (entry: string) => {
+    setText((current) => current.replace(/@([^\s@]*)$/, `@${entry} `));
+    setSuggestions([]);
+  };
 
   const handlePrimaryAction = () => {
     const trimmed = text.trim();
@@ -45,6 +82,18 @@ export function MessageInput({
 
   return (
     <View style={[styles.wrapper, { paddingBottom: bottomInset }]}>
+      {(loadingSuggestions || suggestions.length > 0) && (
+        <View style={styles.mentionWrap}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.mentionList}>
+            {loadingSuggestions && <Text style={styles.mentionHint}>Searching files...</Text>}
+            {!loadingSuggestions && suggestions.map((entry) => (
+              <Pressable key={entry} style={styles.mentionChip} onPress={() => applyMentionSuggestion(entry)}>
+                <Text style={styles.mentionChipText}>@{entry}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </View>
+      )}
       <View style={styles.container}>
         <TextInput
           style={styles.input}
@@ -151,5 +200,31 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontSize: 11,
     lineHeight: 14,
     fontFamily: typography.semibold,
+  },
+  mentionWrap: {
+    marginBottom: 8,
+  },
+  mentionList: {
+    gap: 6,
+  },
+  mentionHint: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontFamily: typography.medium,
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  mentionChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  mentionChipText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontFamily: typography.medium,
   },
 });

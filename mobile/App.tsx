@@ -905,6 +905,27 @@ function WorkspaceScreen({
     void sendMessage(activeAgent.id, trimmed);
   }, [activeAgent, clearAgentMessages, interruptAgent, sendMessage]);
 
+  const resolveFilenameMentions = useCallback(async (query: string) => {
+    if (!activeWorkspace?.cwd) return [];
+    const res = await sendRequest('list_files', { cwd: activeWorkspace.cwd, path: '.' });
+    if (res.type !== 'response' || !res.data) return [];
+    const entries = ((res.data as { entries?: Array<{ name?: string; type?: string }> }).entries || []);
+    const normalizedQuery = query.trim().toLowerCase();
+    return entries
+      .filter((entry) => typeof entry.name === 'string')
+      .map((entry) => ({
+        name: entry.name as string,
+        type: entry.type as string,
+      }))
+      .filter((entry) => entry.name.toLowerCase().includes(normalizedQuery))
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+      .slice(0, 8)
+      .map((entry) => (entry.type === 'directory' ? `${entry.name}/` : entry.name));
+  }, [activeWorkspace?.cwd]);
+
   const canSend = !!activeAgent
     && connectionStatus === 'connected'
     && activeAgent.status !== 'error';
@@ -1241,6 +1262,7 @@ function WorkspaceScreen({
         queueCount={queuedCount}
         disabled={!canSend}
         bottomInset={bottomInset}
+        onResolveFileMentions={resolveFilenameMentions}
         colors={colors}
       />
 

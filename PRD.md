@@ -141,10 +141,8 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 ### 3.4 Input Improvements
 
 - [x] Slash commands: `/stop` (interrupt), `/clear` (clear thread display)
-- [ ] `@filename` mention — bridge action `list_files` returns cwd contents for autocomplete
+- [x] `@filename` mention — bridge action `list_files` returns cwd contents for autocomplete
 - [ ] Voice input via expo-speech (mic button)
-  - Blocked: `@filename` autocomplete depends on `list_files` bridge action and input-level suggestion UI.
-  - Need: Implement bridge `list_files` action + message input suggestion dropdown insertion flow.
   - Blocked: `expo-speech` is text-to-speech only, not speech-to-text.
   - Need: Replace requirement with speech-recognition package/API choice, then wire mic capture into message input.
 
@@ -189,8 +187,8 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 ### 5.1 File Browser
 
-- [ ] New bridge action: `list_files { cwd, path }` — returns directory listing
-- [ ] New bridge action: `read_file { cwd, path }` — returns file contents
+- [x] New bridge action: `list_files { cwd, path }` — returns directory listing
+- [x] New bridge action: `read_file { cwd, path }` — returns file contents
 - [ ] File tree screen accessible from workspace
 - [ ] Syntax-highlighted file viewer
 - [ ] Mark files modified by agent (tracked from file_change events)
