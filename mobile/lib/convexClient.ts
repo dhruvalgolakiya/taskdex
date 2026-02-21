@@ -1,6 +1,6 @@
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../convex/_generated/api';
-import type { AgentMessage } from '../types';
+import type { AgentMessage, AgentWorkspace, AgentThread } from '../types';
 
 export const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL;
 export const convexClient = convexUrl ? new ConvexReactClient(convexUrl) : null;
@@ -66,6 +66,10 @@ interface ThreadRecordInput {
   createdAt: number;
 }
 
+interface BridgeSettingInput {
+  bridgeUrl: string;
+}
+
 export async function fetchThreadMessages(
   threadId: string,
   params: FetchThreadMessagesParams = {},
@@ -111,5 +115,66 @@ export async function persistThreadRecord(input: ThreadRecordInput): Promise<voi
     await convexClient.mutation(api.persistence.saveThread, input);
   } catch {
     // Best-effort persistence; local state remains source of truth if network fails.
+  }
+}
+
+export async function fetchWorkspaceGraph(): Promise<AgentWorkspace[] | null> {
+  if (!convexClient) return null;
+  try {
+    const workspaceRows = await convexClient.query(api.persistence.getWorkspaces, {});
+    const threadRowsByWorkspace = await Promise.all(
+      workspaceRows.map((workspace) =>
+        convexClient.query(api.persistence.getThreads, { workspaceId: workspace.id })),
+    );
+
+    const workspaces: AgentWorkspace[] = workspaceRows
+      .map((workspace, index) => {
+        const threads: AgentThread[] = [...threadRowsByWorkspace[index]]
+          .sort((a, b) => a.createdAt - b.createdAt)
+          .map((thread) => ({
+            id: thread.id,
+            title: thread.title,
+            createdAt: thread.createdAt,
+          }));
+
+        return {
+          id: workspace.id,
+          name: workspace.name,
+          model: workspace.model,
+          cwd: workspace.cwd,
+          threads,
+          activeThreadId: threads[0]?.id || null,
+          createdAt: workspace.createdAt,
+          updatedAt: threads[threads.length - 1]?.createdAt || workspace.createdAt,
+        };
+      })
+      .sort((a, b) => a.createdAt - b.createdAt);
+
+    return workspaces;
+  } catch {
+    return null;
+  }
+}
+
+export async function persistBridgeSetting(input: BridgeSettingInput): Promise<void> {
+  if (!convexClient) return;
+  try {
+    await convexClient.mutation(api.persistence.saveSettings, {
+      id: 'default',
+      bridgeUrl: input.bridgeUrl,
+      preferences: {},
+    });
+  } catch {
+    // Best-effort persistence; local state remains source of truth if network fails.
+  }
+}
+
+export async function fetchBridgeSetting(): Promise<string | null> {
+  if (!convexClient) return null;
+  try {
+    const settings = await convexClient.query(api.persistence.getSettings, { id: 'default' });
+    return settings?.bridgeUrl || null;
+  } catch {
+    return null;
   }
 }

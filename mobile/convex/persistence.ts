@@ -85,6 +85,28 @@ export const saveWorkspace = mutation({
   },
 });
 
+export const saveSettings = mutation({
+  args: {
+    id: v.string(),
+    bridgeUrl: v.string(),
+    theme: v.optional(v.string()),
+    preferences: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("settings")
+      .withIndex("by_setting_id", (q) => q.eq("id", args.id))
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, args);
+      return existing._id;
+    }
+
+    return await ctx.db.insert("settings", args);
+  },
+});
+
 export const getMessages = query({
   args: {
     threadId: v.string(),
@@ -123,5 +145,17 @@ export const getWorkspaces = query({
   args: {},
   handler: async (ctx) => {
     return await ctx.db.query("workspaces").withIndex("by_createdAt").collect();
+  },
+});
+
+export const getSettings = query({
+  args: {
+    id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("settings")
+      .withIndex("by_setting_id", (q) => q.eq("id", args.id))
+      .unique();
   },
 });

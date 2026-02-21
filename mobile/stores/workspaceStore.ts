@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AgentWorkspace } from '../types';
+import { fetchWorkspaceGraph } from '../lib/convexClient';
 
 const WORKSPACES_KEY = 'codex_workspaces_v1';
 
@@ -50,6 +51,14 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   loaded: false,
 
   loadSavedWorkspaces: async () => {
+    const convexWorkspaces = await fetchWorkspaceGraph();
+    if (convexWorkspaces !== null) {
+      const activeWorkspaceId = convexWorkspaces[0]?.id || null;
+      set({ workspaces: convexWorkspaces, activeWorkspaceId, loaded: true });
+      persist(convexWorkspaces, activeWorkspaceId);
+      return;
+    }
+
     try {
       const raw = await AsyncStorage.getItem(WORKSPACES_KEY);
       if (!raw) {
