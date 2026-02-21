@@ -234,6 +234,19 @@ function WorkspaceScreen({
   const [selectedFileContent, setSelectedFileContent] = useState('');
   const [loadingFileContent, setLoadingFileContent] = useState(false);
   const [fileBrowserError, setFileBrowserError] = useState<string | null>(null);
+  const [showGitModal, setShowGitModal] = useState(false);
+  const [gitStatus, setGitStatus] = useState<{
+    branch: string;
+    isClean: boolean;
+    modified: string[];
+    notAdded: string[];
+    deleted: string[];
+    created: string[];
+  } | null>(null);
+  const [gitDiff, setGitDiff] = useState('');
+  const [gitBranches, setGitBranches] = useState<string[]>([]);
+  const [loadingGit, setLoadingGit] = useState(false);
+  const [committingGit, setCommittingGit] = useState(false);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
@@ -1017,6 +1030,61 @@ function WorkspaceScreen({
     void openFilePath(path);
   }, [loadDirectoryEntries, openFilePath]);
 
+  const refreshGitInfo = useCallback(async () => {
+    if (!activeWorkspace?.cwd || connectionStatus !== 'connected') return;
+    setLoadingGit(true);
+    try {
+      const [statusRes, diffRes, branchesRes] = await Promise.all([
+        sendRequest('git_status', { cwd: activeWorkspace.cwd }),
+        sendRequest('git_diff', { cwd: activeWorkspace.cwd }),
+        sendRequest('git_branches', { cwd: activeWorkspace.cwd }),
+      ]);
+
+      if (statusRes.type === 'response' && statusRes.data) {
+        setGitStatus(statusRes.data as any);
+      }
+      if (diffRes.type === 'response' && diffRes.data) {
+        setGitDiff(((diffRes.data as { diff?: string }).diff || '').trim());
+      }
+      if (branchesRes.type === 'response' && branchesRes.data) {
+        setGitBranches((((branchesRes.data as { all?: string[] }).all) || []).slice(0, 40));
+      }
+    } catch (err: any) {
+      setGitDiff(err?.message || 'Unable to fetch git info');
+    } finally {
+      setLoadingGit(false);
+    }
+  }, [activeWorkspace?.cwd, connectionStatus]);
+
+  const handleCommitGitChanges = useCallback(async () => {
+    if (!activeWorkspace?.cwd) return;
+    setCommittingGit(true);
+    try {
+      const message = `chore: mobile commit ${new Date().toISOString()}`;
+      await sendRequest('git_commit', { cwd: activeWorkspace.cwd, message });
+      await refreshGitInfo();
+    } catch (err: any) {
+      Alert.alert('Git commit failed', err?.message || 'Unable to commit changes');
+    } finally {
+      setCommittingGit(false);
+    }
+  }, [activeWorkspace?.cwd, refreshGitInfo]);
+
+  const handleSwitchBranch = useCallback(async (branch: string) => {
+    if (!activeWorkspace?.cwd) return;
+    try {
+      await sendRequest('git_checkout', { cwd: activeWorkspace.cwd, branch });
+      await refreshGitInfo();
+    } catch (err: any) {
+      Alert.alert('Branch switch failed', err?.message || 'Unable to switch branch');
+    }
+  }, [activeWorkspace?.cwd, refreshGitInfo]);
+
+  useEffect(() => {
+    if (!activeWorkspace?.cwd || connectionStatus !== 'connected') return;
+    void refreshGitInfo();
+  }, [activeWorkspace?.cwd, connectionStatus, refreshGitInfo]);
+
   const canSend = !!activeAgent
     && connectionStatus === 'connected'
     && activeAgent.status !== 'error';
@@ -1161,6 +1229,16 @@ function WorkspaceScreen({
           >
             <Text style={s.headerPillText}>Files</Text>
           </Pressable>
+          <Pressable
+            onPress={() => {
+              setShowGitModal(true);
+              void refreshGitInfo();
+            }}
+            style={({ pressed }) => [s.headerPillBtn, !activeWorkspace && s.smallActionBtnDisabled, pressed && s.pressed]}
+            disabled={!activeWorkspace}
+          >
+            <Text style={s.headerPillText}>Git</Text>
+          </Pressable>
           <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}>
             <Text style={s.headerPillText}>Settings</Text>
           </Pressable>
@@ -1195,7 +1273,7 @@ function WorkspaceScreen({
 
       <Text style={[s.metaInline, { color: statusColor }]} numberOfLines={1}>
         {activeWorkspace
-          ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}`
+          ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}${gitStatus?.branch ? ` • ${gitStatus.branch} ${gitStatus.isClean ? 'clean' : 'dirty'}` : ''}`
           : getConnectionLabel(connectionStatus)}
       </Text>
 
@@ -1635,6 +1713,51 @@ function WorkspaceScreen({
                 disabled={loadingFileContent}
               >
                 <Text style={s.primaryText}>{loadingFileContent ? 'Opening...' : (selectedFilePath ? 'List' : 'Refresh')}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showGitModal} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Git</Text>
+            <Text style={s.fileBrowserPathLabel}>
+              {gitStatus?.branch ? `${gitStatus.branch} (${gitStatus.isClean ? 'clean' : 'dirty'})` : 'No git data yet'}
+            </Text>
+
+            <ScrollView style={s.gitBlock}>
+              {loadingGit && <Text style={s.fileHint}>Loading git info...</Text>}
+              {!loadingGit && gitBranches.length > 0 && (
+                <View style={s.gitBranchWrap}>
+                  {gitBranches.map((branch) => (
+                    <Pressable key={branch} style={s.gitBranchChip} onPress={() => void handleSwitchBranch(branch)}>
+                      <Text style={s.gitBranchText}>{branch}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+
+              <Text style={s.gitSectionTitle}>Diff</Text>
+              <ScrollView style={s.gitDiffBox}>
+                <Text style={s.gitDiffText}>{gitDiff || 'No diff'}</Text>
+              </ScrollView>
+            </ScrollView>
+
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setShowGitModal(false)}>
+                <Text style={s.cancelText}>Close</Text>
+              </Pressable>
+              <Pressable style={[s.cancelBtn, loadingGit && s.smallActionBtnDisabled]} onPress={() => void refreshGitInfo()}>
+                <Text style={s.cancelText}>Refresh</Text>
+              </Pressable>
+              <Pressable
+                style={[s.primaryBtn, (committingGit || gitStatus?.isClean) && s.smallActionBtnDisabled]}
+                onPress={() => void handleCommitGitChanges()}
+                disabled={committingGit || !!gitStatus?.isClean}
+              >
+                <Text style={s.primaryText}>{committingGit ? 'Committing...' : 'Commit'}</Text>
               </Pressable>
             </View>
           </View>
@@ -2387,6 +2510,55 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     color: '#c23a3a',
     fontSize: 12,
     fontFamily: typography.medium,
+  },
+  gitBlock: {
+    maxHeight: 380,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+    padding: 10,
+  },
+  gitBranchWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+  },
+  gitBranchChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    backgroundColor: colors.surface,
+  },
+  gitBranchText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontFamily: typography.medium,
+  },
+  gitSectionTitle: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    fontFamily: typography.semibold,
+  },
+  gitDiffBox: {
+    maxHeight: 250,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: colors.surface,
+    padding: 8,
+  },
+  gitDiffText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 15,
+    fontFamily: typography.mono,
   },
   modalTitle: {
     color: colors.textPrimary,

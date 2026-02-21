@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { promises as fsPromises } from 'fs';
+import simpleGit from 'simple-git';
 import { AgentManager } from './agent-manager';
 import {
   registerPushToken,
@@ -87,6 +88,12 @@ function resolveWithinCwd(cwd: string, relativePath?: string): string {
     return resolved;
   }
   throw new Error('Path escapes cwd');
+}
+
+function gitForCwd(cwd: string) {
+  return simpleGit({
+    baseDir: path.resolve(cwd || process.cwd()),
+  });
 }
 
 const config = loadOrCreateConfig();
@@ -295,6 +302,70 @@ wss.on('connection', (ws, req) => {
             path: relativePath,
             content,
           });
+          break;
+        }
+
+        case 'git_status': {
+          const { cwd } = params as { cwd: string };
+          const git = gitForCwd(cwd || process.cwd());
+          const status = await git.status();
+          reply({
+            branch: status.current,
+            isClean: status.isClean(),
+            ahead: status.ahead,
+            behind: status.behind,
+            modified: status.modified,
+            created: status.created,
+            deleted: status.deleted,
+            renamed: status.renamed,
+            notAdded: status.not_added,
+            conflicted: status.conflicted,
+          });
+          break;
+        }
+
+        case 'git_log': {
+          const { cwd, limit } = params as { cwd: string; limit?: number };
+          const git = gitForCwd(cwd || process.cwd());
+          const history = await git.log({ maxCount: Math.min(Math.max(limit || 20, 1), 100) });
+          reply(history.all);
+          break;
+        }
+
+        case 'git_diff': {
+          const { cwd, file } = params as { cwd: string; file?: string };
+          const git = gitForCwd(cwd || process.cwd());
+          const diff = file ? await git.diff([file]) : await git.diff();
+          reply({ diff });
+          break;
+        }
+
+        case 'git_commit': {
+          const { cwd, message } = params as { cwd: string; message: string };
+          const git = gitForCwd(cwd || process.cwd());
+          await git.add('.');
+          const result = await git.commit(message || 'chore: update via pylon mobile');
+          reply(result);
+          break;
+        }
+
+        case 'git_branches': {
+          const { cwd } = params as { cwd: string };
+          const git = gitForCwd(cwd || process.cwd());
+          const branches = await git.branchLocal();
+          reply({
+            current: branches.current,
+            all: branches.all,
+          });
+          break;
+        }
+
+        case 'git_checkout': {
+          const { cwd, branch } = params as { cwd: string; branch: string };
+          if (!branch) throw new Error('branch is required');
+          const git = gitForCwd(cwd || process.cwd());
+          await git.checkout(branch);
+          reply({ ok: true });
           break;
         }
 

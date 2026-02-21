@@ -194,12 +194,12 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 ### 5.2 Git Integration
 
-- [ ] Install `simple-git` on bridge
-- [ ] Bridge actions: `git_status`, `git_log`, `git_diff`, `git_commit`
-- [ ] Git status badge in chat header (branch name, clean/dirty)
-- [ ] Diff viewer for agent's changes
-- [ ] One-tap commit with auto-generated message
-- [ ] Branch picker (list/switch)
+- [x] Install `simple-git` on bridge
+- [x] Bridge actions: `git_status`, `git_log`, `git_diff`, `git_commit`
+- [x] Git status badge in chat header (branch name, clean/dirty)
+- [x] Diff viewer for agent's changes
+- [x] One-tap commit with auto-generated message
+- [x] Branch picker (list/switch)
 
 ---
 
