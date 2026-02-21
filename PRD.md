@@ -57,7 +57,7 @@ Currently messages are in AsyncStorage (fragile, single device). Agent state is 
   - `threads` — id, workspaceId, title, bridgeAgentId, createdAt
   - `messages` — id, threadId, role, type, text, itemId, timestamp, streaming
   - `settings` — id, bridgeUrl, theme, preferences
-- [ ] Create mutations: `saveMessage`, `saveThread`, `saveWorkspace`
+- [x] Create mutations: `saveMessage`, `saveThread`, `saveWorkspace`
 - [ ] Create queries: `getMessages(threadId)`, `getThreads(workspaceId)`, `getWorkspaces`
 - [ ] Wire `ConvexProvider` into App.tsx
 
