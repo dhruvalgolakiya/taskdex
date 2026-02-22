@@ -17,7 +17,7 @@
     "babel-preset-expo": "^54.0.10",
     "convex": "^1.32.0",
     "expo": "~54.0.33",
-    "expo-barcode-scanner": "^13.0.1",
+    "expo-camera": "~17.0.10",
     "expo-clipboard": "^8.0.8",
     "expo-constants": "^18.0.13",
     "expo-device": "~8.0.10",

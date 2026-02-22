@@ -27,7 +27,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ConvexProvider, useQuery } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BarCodeScanner, type BarCodeScannedCallback } from 'expo-barcode-scanner';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import {
   Manrope_400Regular,
@@ -287,6 +287,7 @@ function WorkspaceScreen({
     setActiveThread,
     removeThreadFromWorkspace,
     updateWorkspaceModel,
+    updateWorkspaceConfig,
     replaceThreadAgentId,
     setWorkspacesFromConvex,
     ensureWorkspacesFromAgents,
@@ -302,9 +303,11 @@ function WorkspaceScreen({
   const [showSettings, setShowSettings] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [qrScanEnabled, setQrScanEnabled] = useState(true);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showEditModel, setShowEditModel] = useState(false);
   const [showAgentDashboard, setShowAgentDashboard] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showUsageModal, setShowUsageModal] = useState(false);
   const [agentDashboardFilter, setAgentDashboardFilter] = useState<'all' | 'active' | 'stopped'>('all');
   const [showSidebar, setShowSidebar] = useState(false);
@@ -345,6 +348,7 @@ function WorkspaceScreen({
   const [bridgeHealth, setBridgeHealth] = useState<string>('Health unknown');
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [modelInput, setModelInput] = useState('');
+  const [cwdInput, setCwdInput] = useState('');
   const [savingModel, setSavingModel] = useState(false);
   const [queueCollapsed, setQueueCollapsed] = useState(false);
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
@@ -573,7 +577,8 @@ function WorkspaceScreen({
   useEffect(() => {
     if (!showEditModel) return;
     setModelInput(activeAgent?.model || activeWorkspace?.model || '');
-  }, [showEditModel, activeAgent?.id, activeAgent?.model, activeWorkspace?.id, activeWorkspace?.model]);
+    setCwdInput(activeAgent?.cwd || activeWorkspace?.cwd || '');
+  }, [showEditModel, activeAgent?.id, activeAgent?.model, activeAgent?.cwd, activeWorkspace?.id, activeWorkspace?.model, activeWorkspace?.cwd]);
 
   useEffect(() => {
     if (!activeThreadId || !activeAgent) return;
@@ -1180,16 +1185,16 @@ function WorkspaceScreen({
   }, []);
 
   const handleOpenQrScanner = useCallback(async () => {
-    const permission = await BarCodeScanner.requestPermissionsAsync();
-    if (permission.status !== 'granted') {
+    const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission();
+    if (!permission?.granted) {
       Alert.alert('Camera permission required', 'Enable camera access to scan bridge QR codes.');
       return;
     }
     setQrScanEnabled(true);
     setShowQrScanner(true);
-  }, []);
+  }, [cameraPermission, requestCameraPermission]);
 
-  const handleBarCodeScanned = useCallback<BarCodeScannedCallback>(({ data }) => {
+  const handleBarCodeScanned = useCallback(({ data }: { data: string }) => {
     if (!qrScanEnabled) return;
     setQrScanEnabled(false);
     const parsed = parseBridgeQrPayload(data || '');
@@ -1233,26 +1238,38 @@ function WorkspaceScreen({
   const handleSaveModel = async () => {
     if (!activeAgent) return;
     const nextModel = modelInput.trim();
+    const nextCwd = cwdInput.trim();
     if (!nextModel) {
       Alert.alert('Invalid model', 'Model cannot be empty.');
       return;
     }
-    if (nextModel === activeAgent.model) {
+    if (!nextCwd) {
+      Alert.alert('Invalid path', 'Working directory cannot be empty.');
+      return;
+    }
+    const modelChanged = nextModel !== activeAgent.model;
+    const cwdChanged = nextCwd !== (activeAgent.cwd || activeWorkspace?.cwd);
+    if (!modelChanged && !cwdChanged) {
       setShowEditModel(false);
       return;
     }
 
     setSavingModel(true);
     try {
-      await updateAgentModel(activeAgent.id, nextModel);
+      if (modelChanged) {
+        await updateAgentModel(activeAgent.id, nextModel);
+      }
       if (activeWorkspace) {
-        updateWorkspaceModel(activeWorkspace.id, nextModel);
+        updateWorkspaceConfig(activeWorkspace.id, {
+          ...(modelChanged ? { model: nextModel } : {}),
+          ...(cwdChanged ? { cwd: nextCwd } : {}),
+        });
         await persistWorkspaceRecord({
           id: activeWorkspace.id,
           bridgeUrl,
           name: activeWorkspace.name,
-          model: nextModel,
-          cwd: activeWorkspace.cwd,
+          model: modelChanged ? nextModel : activeWorkspace.model,
+          cwd: cwdChanged ? nextCwd : activeWorkspace.cwd,
           approvalPolicy: activeWorkspace.approvalPolicy,
           systemPrompt: activeWorkspace.systemPrompt,
           templateId: activeWorkspace.templateId,
@@ -1262,7 +1279,7 @@ function WorkspaceScreen({
       }
       setShowEditModel(false);
     } catch (err: any) {
-      Alert.alert('Error', toUserErrorMessage(err, 'Failed to update model'));
+      Alert.alert('Error', toUserErrorMessage(err, 'Failed to update agent config'));
     } finally {
       setSavingModel(false);
     }
@@ -1801,7 +1818,7 @@ function WorkspaceScreen({
           <Pressable style={s.menuBtn} onPress={openSidebar}>
             <Ionicons name="chatbubbles-outline" size={16} color={colors.background} />
           </Pressable>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={s.headerTitle}>Pylon</Text>
             <Text style={s.topSub} numberOfLines={1}>
               {activeWorkspace ? `${activeWorkspace.name} · ${activeThread?.title || 'No thread'}` : 'No workspace selected'}
@@ -1809,55 +1826,12 @@ function WorkspaceScreen({
           </View>
         </View>
         <View style={s.topActions}>
-          <View style={[s.connectionPill, { borderColor: `${connectionColor}50` }]}>
-            <Text style={[s.connectionPillText, { color: connectionColor }]}>
-              {connectionStatus === 'connected' ? 'Live' : 'Offline'}
-            </Text>
-          </View>
-          <Pressable
-            onPress={handleOpenFileBrowser}
-            style={({ pressed }) => [s.headerPillBtn, !activeWorkspace && s.smallActionBtnDisabled, pressed && s.pressed]}
-            disabled={!activeWorkspace}
-          >
-            <Text style={s.headerPillText}>Files</Text>
+          <View style={[s.connectionDot, { backgroundColor: connectionColor }]} />
+          <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerIconBtn, pressed && s.pressed]}>
+            <Ionicons name="settings-outline" size={18} color={colors.textPrimary} />
           </Pressable>
-          <Pressable
-            onPress={() => {
-              setShowGitModal(true);
-              void refreshGitInfo();
-            }}
-            style={({ pressed }) => [s.headerPillBtn, !activeWorkspace && s.smallActionBtnDisabled, pressed && s.pressed]}
-            disabled={!activeWorkspace}
-          >
-            <Text style={s.headerPillText}>Git</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setShowAgentDashboard(true)}
-            style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
-          >
-            <Text style={s.headerPillText}>Agents</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setShowUsageModal(true)}
-            style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
-          >
-            <Text style={s.headerPillText}>Usage</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setShowNotificationsModal(true)}
-            style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
-          >
-            <Text style={s.headerPillText}>Notify</Text>
-          </Pressable>
-          <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}>
-            <Text style={s.headerPillText}>Settings</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => setShowEditModel(true)}
-            style={({ pressed }) => [s.headerPillBtn, !activeAgent && s.smallActionBtnDisabled, pressed && s.pressed]}
-            disabled={!activeAgent}
-          >
-            <Text style={s.headerPillText}>Model</Text>
+          <Pressable onPress={() => setShowMoreMenu(true)} style={({ pressed }) => [s.headerIconBtn, pressed && s.pressed]}>
+            <Ionicons name="ellipsis-horizontal" size={18} color={colors.textPrimary} />
           </Pressable>
         </View>
       </View>
@@ -2499,7 +2473,9 @@ function WorkspaceScreen({
               <Pressable
                 style={s.primaryBtn}
                 onPress={() => {
-                  setNewWorkspaceCwd(directoryResolvedCwd || newWorkspaceCwd);
+                  const selected = directoryResolvedCwd || newWorkspaceCwd;
+                  setNewWorkspaceCwd(selected);
+                  setCwdInput(selected);
                   setShowDirectoryPicker(false);
                 }}
               >
@@ -2907,8 +2883,9 @@ function WorkspaceScreen({
             <Text style={s.modalTitle}>Scan Bridge QR</Text>
             <Text style={s.themeHint}>Point camera at the QR code shown in bridge terminal output.</Text>
             <View style={s.qrScannerWrap}>
-              <BarCodeScanner
-                onBarCodeScanned={handleBarCodeScanned}
+              <CameraView
+                onBarcodeScanned={handleBarCodeScanned}
+                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
                 style={StyleSheet.absoluteFillObject}
               />
             </View>
@@ -2925,6 +2902,32 @@ function WorkspaceScreen({
             </View>
           </View>
         </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showMoreMenu} transparent={true} animationType="fade">
+        <Pressable style={s.modalOverlay} onPress={() => setShowMoreMenu(false)}>
+          <Pressable style={s.moreMenuSheet} onPress={() => {}}>
+            <View style={s.moreMenuHandle} />
+            {[
+              { icon: 'folder-outline' as const, label: 'Files', onPress: () => { setShowMoreMenu(false); handleOpenFileBrowser(); }, disabled: !activeWorkspace },
+              { icon: 'git-branch-outline' as const, label: 'Git', onPress: () => { setShowMoreMenu(false); setShowGitModal(true); void refreshGitInfo(); }, disabled: !activeWorkspace },
+              { icon: 'people-outline' as const, label: 'Agents', onPress: () => { setShowMoreMenu(false); setShowAgentDashboard(true); } },
+              { icon: 'bar-chart-outline' as const, label: 'Usage', onPress: () => { setShowMoreMenu(false); setShowUsageModal(true); } },
+              { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => { setShowMoreMenu(false); setShowNotificationsModal(true); } },
+              { icon: 'build-outline' as const, label: 'Agent Config', onPress: () => { setShowMoreMenu(false); setShowEditModel(true); }, disabled: !activeAgent },
+            ].map((item) => (
+              <Pressable
+                key={item.label}
+                style={({ pressed }) => [s.moreMenuItem, item.disabled && s.smallActionBtnDisabled, pressed && s.pressed]}
+                onPress={item.onPress}
+                disabled={item.disabled}
+              >
+                <Ionicons name={item.icon} size={20} color={colors.textPrimary} />
+                <Text style={s.moreMenuItemText}>{item.label}</Text>
+              </Pressable>
+            ))}
+          </Pressable>
+        </Pressable>
       </Modal>
 
       <Modal visible={showSettings} transparent={true} animationType="fade">
@@ -3011,7 +3014,7 @@ function WorkspaceScreen({
       <Modal visible={showEditModel} transparent={true} animationType="fade">
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
-            <Text style={s.modalTitle}>Edit Model</Text>
+            <Text style={s.modalTitle}>Edit Agent</Text>
             <Text style={s.label}>Model</Text>
             <TextInput
               style={s.input}
@@ -3023,16 +3026,38 @@ function WorkspaceScreen({
               autoCorrect={false}
               autoFocus={true}
             />
+            <Text style={s.label}>Working Directory</Text>
+            <View style={s.cwdRow}>
+              <TextInput
+                style={[s.input, s.cwdInput]}
+                value={cwdInput}
+                onChangeText={setCwdInput}
+                placeholder="~/projects"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Pressable
+                style={s.cancelBtn}
+                onPress={() => {
+                  setShowDirectoryPicker(true);
+                  setDirectoryResolvedCwd(cwdInput.trim() || '.');
+                  void loadDirectoryOptions('.');
+                }}
+              >
+                <Text style={s.cancelText}>Browse</Text>
+              </Pressable>
+            </View>
             <View style={s.modalActions}>
               <Pressable style={s.cancelBtn} onPress={() => setShowEditModel(false)} disabled={savingModel}>
                 <Text style={s.cancelText}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[s.primaryBtn, (savingModel || !modelInput.trim()) && s.smallActionBtnDisabled]}
+                style={[s.primaryBtn, (savingModel || !modelInput.trim() || !cwdInput.trim()) && s.smallActionBtnDisabled]}
                 onPress={handleSaveModel}
-                disabled={savingModel || !modelInput.trim()}
+                disabled={savingModel || !modelInput.trim() || !cwdInput.trim()}
               >
-                <Text style={s.primaryText}>{savingModel ? 'Saving...' : 'Save Model'}</Text>
+                <Text style={s.primaryText}>{savingModel ? 'Saving...' : 'Save'}</Text>
               </Pressable>
             </View>
           </View>
@@ -3205,33 +3230,54 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   topActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 4,
   },
-  connectionPill: {
+  connectionDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 4,
+  },
+  headerIconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+  },
+  moreMenuSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingBottom: 34,
+    paddingTop: 8,
+    paddingHorizontal: 16,
+  },
+  moreMenuHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.border,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  moreMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: 1,
-    borderRadius: 999,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
-    backgroundColor: colors.surface,
+    gap: 14,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
   },
-  connectionPillText: {
-    fontSize: 11,
-    fontFamily: typography.semibold,
-  },
-  headerPillBtn: {
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  headerPillText: {
+  moreMenuItemText: {
     color: colors.textPrimary,
-    fontSize: 11,
-    fontFamily: typography.semibold,
+    fontSize: 16,
+    fontFamily: typography.medium,
   },
 
   linkActionBtn: {
