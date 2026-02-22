@@ -75,6 +75,9 @@ export class AgentManager {
     agentId?: string,
   ): Promise<Omit<AgentInfo, 'process' | 'buffer' | 'pendingResponses'>> {
     const id = agentId || uuid();
+    if (this.agents.has(id)) {
+      throw new Error(`Agent ${id} is already running`);
+    }
     console.log(`\n${BG_BLUE}${WHITE}${BOLD} NEW AGENT ${RESET} ${CYAN}${name}${RESET} (${DIM}${id.slice(0, 8)}${RESET})`);
     console.log(`  ${DIM}Model: ${model} | CWD: ${cwd}${RESET}`);
 
@@ -185,11 +188,20 @@ export class AgentManager {
       ? `${agent.systemPrompt.trim()}\n\n${text}`
       : text;
     const turnReq = turnStartRequest(agent.threadId, promptText, agent.model);
-    const res = await this.sendRequest(agent, turnReq);
-    if (res.result) {
-      const turnData = res.result as Record<string, unknown>;
-      const turn = turnData.turn as Record<string, unknown> | undefined;
-      agent.currentTurnId = (turn?.id as string) || (turnData.turnId as string) || null;
+    try {
+      const res = await this.sendRequest(agent, turnReq);
+      if (res.error) {
+        throw new Error(res.error.message || 'Failed to start turn');
+      }
+      if (res.result) {
+        const turnData = res.result as Record<string, unknown>;
+        const turn = turnData.turn as Record<string, unknown> | undefined;
+        agent.currentTurnId = (turn?.id as string) || (turnData.turnId as string) || null;
+      }
+    } catch (err) {
+      agent.status = 'error';
+      agent.currentTurnId = null;
+      throw err;
     }
   }
 

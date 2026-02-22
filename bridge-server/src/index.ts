@@ -280,12 +280,14 @@ wss.on('connection', (ws, req) => {
             cwd,
             approvalPolicy,
             systemPrompt,
+            agentId,
           } = params as {
             name: string;
             model: string;
             cwd: string;
             approvalPolicy?: string;
             systemPrompt?: string;
+            agentId?: string;
           };
           const defaultCwd = process.env.CODEX_CWD || process.cwd();
           const resolvedCwd = cwd || defaultCwd;
@@ -296,6 +298,7 @@ wss.on('connection', (ws, req) => {
             resolvedCwd,
             approvalPolicy || 'never',
             systemPrompt || '',
+            agentId,
           );
           reply(agent);
           break;

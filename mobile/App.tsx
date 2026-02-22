@@ -2699,29 +2699,48 @@ function WorkspaceScreen({
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Git</Text>
-            <Text style={s.fileBrowserPathLabel}>
-              {gitStatus?.branch ? `${gitStatus.branch} (${gitStatus.isClean ? 'clean' : 'dirty'})` : 'No git data yet'}
-            </Text>
+            <View style={s.gitStatusCard}>
+              <Text style={s.gitStatusTitle}>{gitStatus?.branch || 'No git data yet'}</Text>
+              <Text style={s.gitStatusSub}>
+                {gitStatus ? (gitStatus.isClean ? 'Working tree clean' : 'Uncommitted changes detected') : 'Connect workspace to load repository status'}
+              </Text>
+            </View>
 
-            <ScrollView style={s.gitBlock}>
+            <View style={s.gitBlock}>
               {loadingGit && <Text style={s.fileHint}>Loading git info...</Text>}
-              {!loadingGit && gitBranches.length > 0 && (
-                <View style={s.gitBranchWrap}>
-                  {gitBranches.map((branch) => (
-                    <Pressable key={branch} style={s.gitBranchChip} onPress={() => void handleSwitchBranch(branch)}>
-                      <Text style={s.gitBranchText}>{branch}</Text>
-                    </Pressable>
-                  ))}
-                </View>
+
+              {!loadingGit && (
+                <>
+                  <Text style={s.gitSectionTitle}>Branches</Text>
+                  {gitBranches.length > 0 ? (
+                    <ScrollView style={s.gitBranchList} contentContainerStyle={s.gitBranchWrap}>
+                      {gitBranches.map((branch) => {
+                        const normalizedBranch = branch.replace(/^\*\s*/, '');
+                        const isActiveBranch = normalizedBranch === gitStatus?.branch;
+                        return (
+                          <Pressable
+                            key={branch}
+                            style={[s.gitBranchChip, isActiveBranch && s.gitBranchChipActive]}
+                            onPress={() => void handleSwitchBranch(normalizedBranch)}
+                          >
+                            <Text style={[s.gitBranchText, isActiveBranch && s.gitBranchTextActive]}>{normalizedBranch}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
+                  ) : (
+                    <Text style={s.fileHint}>No branches available.</Text>
+                  )}
+
+                  <Text style={s.gitSectionTitle}>Diff</Text>
+                  <ScrollView style={s.gitDiffBox}>
+                    <Text style={s.gitDiffText}>{gitDiff || 'No diff'}</Text>
+                  </ScrollView>
+                </>
               )}
+            </View>
 
-              <Text style={s.gitSectionTitle}>Diff</Text>
-              <ScrollView style={s.gitDiffBox}>
-                <Text style={s.gitDiffText}>{gitDiff || 'No diff'}</Text>
-              </ScrollView>
-            </ScrollView>
-
-            <View style={s.modalActions}>
+            <View style={s.gitActionRow}>
               <Pressable style={s.cancelBtn} onPress={() => setShowGitModal(false)}>
                 <Text style={s.cancelText}>Close</Text>
               </Pressable>
@@ -3022,12 +3041,6 @@ function WorkspaceScreen({
             </View>
             <Text style={s.themeHint}>Current theme: {resolvedTheme}</Text>
             <View style={s.settingsInlineActions}>
-              <Pressable
-                style={s.cancelBtn}
-                onPress={() => void handleOpenQrScanner()}
-              >
-                <Text style={s.cancelText}>Scan QR</Text>
-              </Pressable>
               <Pressable
                 style={[s.cancelBtn, checkingHealth && s.smallActionBtnDisabled]}
                 onPress={() => void handleCheckBridgeHealth()}
@@ -4008,19 +4021,45 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontSize: 10,
     fontFamily: typography.mono,
   },
-  gitBlock: {
-    maxHeight: 380,
+  gitStatusCard: {
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 12,
     backgroundColor: colors.surfaceSubtle,
-    padding: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 10,
+    gap: 2,
+  },
+  gitStatusTitle: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontFamily: typography.semibold,
+  },
+  gitStatusSub: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontFamily: typography.medium,
+  },
+  gitBlock: {
+    maxHeight: 390,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  gitBranchList: {
+    maxHeight: 108,
+    marginBottom: 10,
   },
   gitBranchWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
-    marginBottom: 10,
+    paddingBottom: 2,
   },
   gitBranchChip: {
     borderWidth: 1,
@@ -4030,10 +4069,18 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     paddingVertical: 4,
     backgroundColor: colors.surface,
   },
+  gitBranchChipActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
   gitBranchText: {
     color: colors.textSecondary,
     fontSize: 11,
     fontFamily: typography.medium,
+  },
+  gitBranchTextActive: {
+    color: colors.accent,
+    fontFamily: typography.semibold,
   },
   gitSectionTitle: {
     color: colors.textMuted,
@@ -4044,7 +4091,7 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontFamily: typography.semibold,
   },
   gitDiffBox: {
-    maxHeight: 250,
+    maxHeight: 230,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 10,
@@ -4056,6 +4103,14 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     fontFamily: typography.mono,
+  },
+  gitActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
   },
   dashboardRow: {
     paddingHorizontal: 10,
@@ -4341,7 +4396,11 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   settingsInlineActions: {
     flexDirection: 'row',
     justifyContent: 'flex-start',
-    marginBottom: 8,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 10,
   },
   modalActions: {
     flexDirection: 'row',

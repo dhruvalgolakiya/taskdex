@@ -467,6 +467,15 @@ async function deliverQueuedMessage(agentId: string, text: string) {
   await sendRequest('send_message', { agentId, text });
 }
 
+function reconcileThreadAgentIdIfChanged(previousAgentId: string, nextAgentId: string) {
+  if (!previousAgentId || !nextAgentId || previousAgentId === nextAgentId) return;
+  const workspaceStore = useWorkspaceStore.getState();
+  const workspace = workspaceStore.workspaces.find((entry) =>
+    entry.threads.some((thread) => thread.id === previousAgentId));
+  if (!workspace) return;
+  workspaceStore.replaceThreadAgentId(workspace.id, previousAgentId, nextAgentId);
+}
+
 async function flushQueuedIfReady(agentId: string) {
   if (queuedDispatchInFlight.has(agentId)) return;
   const store = useAgentStore.getState();
@@ -643,6 +652,7 @@ export async function sendMessageToAgent(agentId: string, text: string) {
   if (agent?.status === 'stopped') {
     try {
       const res = await sendRequest('create_agent', {
+        agentId,
         name: agent.name,
         model: agent.model,
         cwd: agent.cwd,
@@ -657,6 +667,7 @@ export async function sendMessageToAgent(agentId: string, text: string) {
             : a,
         );
         store.setAgents(agents);
+        reconcileThreadAgentIdIfChanged(agentId, newAgent.id);
         await deliverQueuedMessage(newAgent.id, trimmed);
         return;
       }
@@ -680,7 +691,13 @@ export function useWebSocket() {
   }, [bridgeUrl, bridgeApiKey, clientId]);
 
   const send = useCallback(
-    (action: string, params?: Record<string, unknown>): Promise<BridgeResponse> => sendRequest(action, params),
+    async (action: string, params?: Record<string, unknown>): Promise<BridgeResponse> => {
+      const response = await sendRequest(action, params);
+      if (response.type === 'error') {
+        throw new Error(response.error || `Bridge action failed: ${action}`);
+      }
+      return response;
+    },
     [],
   );
 
@@ -730,6 +747,7 @@ export function useWebSocket() {
         store.updateAgentActivity(agentId, 'Reconnecting agent...');
         try {
           const res = await sendRequest('create_agent', {
+            agentId,
             name: agent.name,
             model: agent.model,
             cwd: agent.cwd,
@@ -746,6 +764,7 @@ export function useWebSocket() {
                 : a,
             );
             store.setAgents(agents);
+            reconcileThreadAgentIdIfChanged(agentId, newAgent.id);
             // Send the message to the new agent
             await deliverQueuedMessage(newAgent.id, trimmed);
             return;

@@ -9,23 +9,29 @@ try {
   LiveActivity = null;
 }
 
-// Track active live activities by agentId
-const activeActivities = new Map<string, string>(); // agentId -> activityId
+type ActiveActivity = {
+  id: string;
+  title: string;
+};
+
+// Track active live activities by agentId.
+const activeActivities = new Map<string, ActiveActivity>();
 
 export function isLiveActivitySupported(): boolean {
   if (Platform.OS !== 'ios') return false;
   if (!LiveActivity) return false;
-  try {
-    return LiveActivity.areActivitiesEnabled?.() ?? false;
-  } catch {
-    return false;
-  }
+  return typeof LiveActivity.startActivity === 'function';
 }
 
 export async function startAgentActivity(agentId: string, agentName: string, status: string) {
   if (!isLiveActivitySupported() || !LiveActivity) return;
+  const title = agentName.trim() || 'Agent';
   // Don't start duplicate
-  if (activeActivities.has(agentId)) {
+  const existing = activeActivities.get(agentId);
+  if (existing) {
+    if (existing.title !== title) {
+      activeActivities.set(agentId, { ...existing, title });
+    }
     await updateAgentActivity(agentId, status);
     return;
   }
@@ -33,11 +39,10 @@ export async function startAgentActivity(agentId: string, agentName: string, sta
   try {
     const activityId = await LiveActivity.startActivity(
       {
-        title: agentName,
+        title,
         subtitle: status,
         progressBar: {
-          elapsedTimer: true,
-          date: new Date().toISOString(),
+          date: Date.now(),
         },
       },
       {
@@ -45,7 +50,7 @@ export async function startAgentActivity(agentId: string, agentName: string, sta
       },
     );
     if (activityId) {
-      activeActivities.set(agentId, activityId);
+      activeActivities.set(agentId, { id: activityId, title });
     }
   } catch (err) {
     console.warn('[LiveActivity] Failed to start:', err);
@@ -54,11 +59,12 @@ export async function startAgentActivity(agentId: string, agentName: string, sta
 
 export async function updateAgentActivity(agentId: string, status: string, subtitle?: string) {
   if (!LiveActivity) return;
-  const activityId = activeActivities.get(agentId);
-  if (!activityId) return;
+  const activity = activeActivities.get(agentId);
+  if (!activity) return;
 
   try {
-    await LiveActivity.updateActivity(activityId, {
+    await LiveActivity.updateActivity(activity.id, {
+      title: activity.title,
       subtitle: subtitle || status,
     });
   } catch {
@@ -69,11 +75,12 @@ export async function updateAgentActivity(agentId: string, status: string, subti
 
 export async function stopAgentActivity(agentId: string, finalStatus?: string) {
   if (!LiveActivity) return;
-  const activityId = activeActivities.get(agentId);
-  if (!activityId) return;
+  const activity = activeActivities.get(agentId);
+  if (!activity) return;
 
   try {
-    await LiveActivity.stopActivity(activityId, {
+    await LiveActivity.stopActivity(activity.id, {
+      title: activity.title,
       subtitle: finalStatus || 'Completed',
     });
   } catch {
