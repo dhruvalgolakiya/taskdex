@@ -47,6 +47,7 @@ import { ChatBubble } from './components/ChatBubble';
 import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import type { AgentMessage, QueuedMessage, AgentTemplate } from './types';
 import { api } from './convex/_generated/api';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
@@ -146,6 +147,27 @@ function parseBridgeQrPayload(raw: string): { bridgeUrl: string; apiKey: string 
     }
   } catch {}
   return null;
+}
+
+function toUserErrorMessage(error: unknown, fallback: string): string {
+  const raw = typeof error === 'string'
+    ? error
+    : (typeof (error as any)?.message === 'string' ? (error as any).message : '');
+  const normalized = raw.toLowerCase();
+  if (normalized.includes('not connected') || normalized.includes('websocket')) {
+    return 'Bridge connection is unavailable. Check bridge URL, API key, and network reachability.';
+  }
+  if (normalized.includes('timed out')) {
+    return 'The request timed out. Please try again in a moment.';
+  }
+  if (normalized.includes('unauthorized') || normalized.includes('api key')) {
+    return 'Authentication failed. Verify your bridge API key in settings.';
+  }
+  if (normalized.includes('path escapes')) {
+    return 'The selected path is outside the allowed workspace directory.';
+  }
+  if (raw.trim()) return raw;
+  return fallback;
 }
 
 function guessLanguageFromPath(filePath: string): string {
@@ -366,6 +388,7 @@ function WorkspaceScreen({
     status: 'sent' | 'muted' | 'no_tokens' | 'error';
     deliveredCount: number;
   }>>([]);
+  const [failedSend, setFailedSend] = useState<{ text: string; error: string } | null>(null);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
@@ -637,6 +660,7 @@ function WorkspaceScreen({
   useEffect(() => {
     setEditingQueueItem(null);
     setEditingQueueText('');
+    setFailedSend(null);
   }, [activeThreadId]);
 
   const ensureNotificationPermission = useCallback(async () => {
@@ -892,7 +916,7 @@ function WorkspaceScreen({
       setCloneRepoUrl('');
       await refreshRepoEntries();
     } catch (err: any) {
-      Alert.alert('Clone failed', err?.message || 'Could not clone repository');
+      Alert.alert('Clone failed', toUserErrorMessage(err, 'Could not clone repository'));
     } finally {
       setCloningRepo(false);
     }
@@ -903,7 +927,7 @@ function WorkspaceScreen({
       await sendRequest('pull_repo', { path: repoPath });
       await refreshRepoEntries();
     } catch (err: any) {
-      Alert.alert('Pull failed', err?.message || 'Could not pull repository');
+      Alert.alert('Pull failed', toUserErrorMessage(err, 'Could not pull repository'));
     }
   }, [refreshRepoEntries]);
 
@@ -979,7 +1003,7 @@ function WorkspaceScreen({
       setNewWorkspaceApprovalPolicy('never');
       setSelectedTemplateId(BUILT_IN_TEMPLATES[0].id);
     } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Failed to create workspace');
+      Alert.alert('Error', toUserErrorMessage(err, 'Failed to create workspace'));
     } finally {
       setCreatingWorkspace(false);
       createWorkspaceInFlight.current = false;
@@ -1016,7 +1040,7 @@ function WorkspaceScreen({
       setShowCreateThread(false);
       setNewThreadTitle('');
     } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Failed to create thread');
+      Alert.alert('Error', toUserErrorMessage(err, 'Failed to create thread'));
     } finally {
       setCreatingThread(false);
       createThreadInFlight.current = false;
@@ -1113,7 +1137,7 @@ function WorkspaceScreen({
         `OK • agents ${payload.agents ?? 0} • clients ${payload.connectedClients ?? 0} • ${payload.system?.hostname || 'unknown host'}`,
       );
     } catch (err: any) {
-      setBridgeHealth(err?.message || 'Health check failed');
+      setBridgeHealth(toUserErrorMessage(err, 'Health check failed'));
     } finally {
       setCheckingHealth(false);
     }
@@ -1191,7 +1215,7 @@ function WorkspaceScreen({
         trigger: null,
       });
     } catch (err: any) {
-      Alert.alert('Notification error', err?.message || 'Failed to send test notification');
+      Alert.alert('Notification error', toUserErrorMessage(err, 'Failed to send test notification'));
     } finally {
       setSendingTestNotification(false);
     }
@@ -1229,7 +1253,7 @@ function WorkspaceScreen({
       }
       setShowEditModel(false);
     } catch (err: any) {
-      Alert.alert('Error', err?.message || 'Failed to update model');
+      Alert.alert('Error', toUserErrorMessage(err, 'Failed to update model'));
     } finally {
       setSavingModel(false);
     }
@@ -1267,7 +1291,7 @@ function WorkspaceScreen({
       await sendMessage(activeAgent.id, nextQueued.text);
     } catch (err: any) {
       prependQueuedMessage(activeAgent.id, nextQueued);
-      Alert.alert('Error', err?.message || 'Failed to send queued message');
+      Alert.alert('Error', toUserErrorMessage(err, 'Failed to send queued message'));
     }
   };
 
@@ -1282,6 +1306,19 @@ function WorkspaceScreen({
       },
     ]);
   };
+
+  const handleRetryFailedSend = useCallback(async () => {
+    if (!activeAgent || !failedSend?.text?.trim()) return;
+    try {
+      await sendMessage(activeAgent.id, failedSend.text.trim());
+      setFailedSend(null);
+    } catch (err: any) {
+      setFailedSend({
+        text: failedSend.text.trim(),
+        error: toUserErrorMessage(err, 'Retry failed. Check connection and try again.'),
+      });
+    }
+  }, [activeAgent, failedSend, sendMessage]);
 
   const handleInputSend = useCallback((text: string) => {
     if (!activeAgent) return;
@@ -1298,7 +1335,14 @@ function WorkspaceScreen({
     }
 
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-    void sendMessage(activeAgent.id, trimmed);
+    void sendMessage(activeAgent.id, trimmed)
+      .then(() => setFailedSend(null))
+      .catch((err: any) => {
+        setFailedSend({
+          text: trimmed,
+          error: toUserErrorMessage(err, 'Failed to send message.'),
+        });
+      });
   }, [activeAgent, clearAgentMessages, interruptAgent, sendMessage]);
 
   const resolveFilenameMentions = useCallback(async (query: string) => {
@@ -1345,7 +1389,7 @@ function WorkspaceScreen({
       setFileEntries(entries);
       setFileBrowserPath(relativePath || '.');
     } catch (err: any) {
-      setFileBrowserError(err?.message || 'Failed to load files');
+      setFileBrowserError(toUserErrorMessage(err, 'Failed to load files'));
       setFileEntries([]);
     } finally {
       setLoadingFileEntries(false);
@@ -1366,7 +1410,7 @@ function WorkspaceScreen({
       setSelectedFileContent(payload.content || '');
       setShowFileBrowser(true);
     } catch (err: any) {
-      setFileBrowserError(err?.message || 'Failed to open file');
+      setFileBrowserError(toUserErrorMessage(err, 'Failed to open file'));
     } finally {
       setLoadingFileContent(false);
     }
@@ -1409,7 +1453,7 @@ function WorkspaceScreen({
         setGitBranches((((branchesRes.data as { all?: string[] }).all) || []).slice(0, 40));
       }
     } catch (err: any) {
-      setGitDiff(err?.message || 'Unable to fetch git info');
+      setGitDiff(toUserErrorMessage(err, 'Unable to fetch git info'));
     } finally {
       setLoadingGit(false);
     }
@@ -1423,7 +1467,7 @@ function WorkspaceScreen({
       await sendRequest('git_commit', { cwd: activeWorkspace.cwd, message });
       await refreshGitInfo();
     } catch (err: any) {
-      Alert.alert('Git commit failed', err?.message || 'Unable to commit changes');
+      Alert.alert('Git commit failed', toUserErrorMessage(err, 'Unable to commit changes'));
     } finally {
       setCommittingGit(false);
     }
@@ -1435,7 +1479,7 @@ function WorkspaceScreen({
       await sendRequest('git_checkout', { cwd: activeWorkspace.cwd, branch });
       await refreshGitInfo();
     } catch (err: any) {
-      Alert.alert('Branch switch failed', err?.message || 'Unable to switch branch');
+      Alert.alert('Branch switch failed', toUserErrorMessage(err, 'Unable to switch branch'));
     }
   }, [activeWorkspace?.cwd, refreshGitInfo]);
 
@@ -1491,7 +1535,7 @@ function WorkspaceScreen({
       }
     } catch (err: any) {
       setNotificationPrefs((current) => ({ ...current, [agentId]: previous }));
-      Alert.alert('Notification setting failed', err?.message || 'Could not update notification preference');
+      Alert.alert('Notification setting failed', toUserErrorMessage(err, 'Could not update notification preference'));
     }
   }, [notificationPrefs]);
 
@@ -1625,7 +1669,7 @@ function WorkspaceScreen({
         createdAt: Date.now(),
       });
     } catch (err: any) {
-      Alert.alert('Restart failed', err?.message || 'Could not restart agent');
+      Alert.alert('Restart failed', toUserErrorMessage(err, 'Could not restart agent'));
     }
   }, [agents, createAgent, replaceThreadAgentId, setAgents, workspaces]);
 
@@ -1988,6 +2032,23 @@ function WorkspaceScreen({
           onSendNext={handleSendNextQueued}
           onClear={handleClearQueue}
         />
+      )}
+
+      {!!failedSend && (
+        <View style={s.failedSendBanner}>
+          <View style={s.failedSendTextWrap}>
+            <Text style={s.failedSendTitle}>Message failed to send</Text>
+            <Text style={s.failedSendBody} numberOfLines={2}>{failedSend.error}</Text>
+          </View>
+          <View style={s.failedSendActions}>
+            <Pressable style={s.cancelBtn} onPress={() => setFailedSend(null)}>
+              <Text style={s.cancelText}>Dismiss</Text>
+            </Pressable>
+            <Pressable style={s.primaryBtn} onPress={() => void handleRetryFailedSend()}>
+              <Text style={s.primaryText}>Retry</Text>
+            </Pressable>
+          </View>
+        </View>
       )}
 
       <MessageInput
@@ -3063,7 +3124,9 @@ function AppContent() {
 function App() {
   return (
     <ConvexProvider client={convexClient}>
-      <AppContent />
+      <AppErrorBoundary>
+        <AppContent />
+      </AppErrorBoundary>
     </ConvexProvider>
   );
 }
@@ -3492,6 +3555,37 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     shadowRadius: 9,
     elevation: 3,
     zIndex: 5,
+  },
+  failedSendBanner: {
+    marginHorizontal: 14,
+    marginTop: 4,
+    marginBottom: 4,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 8,
+  },
+  failedSendTextWrap: {
+    gap: 2,
+  },
+  failedSendTitle: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontFamily: typography.semibold,
+  },
+  failedSendBody: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 16,
+    fontFamily: typography.regular,
+  },
+  failedSendActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
   },
   emptyWrap: {
     flex: 1,

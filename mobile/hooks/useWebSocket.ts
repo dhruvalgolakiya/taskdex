@@ -18,6 +18,7 @@ type PendingCallback = (response: BridgeResponse) => void;
 let globalWs: WebSocket | null = null;
 let globalPending = new Map<string, PendingCallback>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
 const queuedDispatchInFlight = new Set<string>();
 const activeTurnsByAgent = new Map<string, {
   turnId?: string;
@@ -84,6 +85,13 @@ function cleanup() {
   }
 }
 
+function getReconnectDelayMs(): number {
+  const base = Math.min(1000 * (2 ** reconnectAttempt), 30000);
+  reconnectAttempt += 1;
+  const jitter = Math.floor(Math.random() * 300);
+  return base + jitter;
+}
+
 function connectWs(url: string) {
   cleanup();
 
@@ -94,6 +102,7 @@ function connectWs(url: string) {
 
   ws.onopen = () => {
     if (globalWs !== ws) return;
+    reconnectAttempt = 0;
     const { bridgeApiKey, clientId } = useAgentStore.getState();
     const requestId = `req_${++requestCounter}`;
     globalPending.set(requestId, (res) => {
@@ -141,7 +150,8 @@ function connectWs(url: string) {
     if (globalWs !== ws) return;
     globalWs = null;
     useAgentStore.getState().setConnectionStatus('disconnected');
-    reconnectTimer = setTimeout(() => connectWs(url), 3000);
+    const delay = getReconnectDelayMs();
+    reconnectTimer = setTimeout(() => connectWs(url), delay);
   };
 
   ws.onerror = () => {

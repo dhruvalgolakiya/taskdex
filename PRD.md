@@ -310,10 +310,10 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 10.4 Error Handling
 
-- [ ] Replace raw error strings with user-friendly messages
-- [ ] Retry button on failed sends
-- [ ] Error boundary wrapping app
-- [ ] Exponential backoff on reconnect (currently fixed 3s)
+- [x] Replace raw error strings with user-friendly messages
+- [x] Retry button on failed sends
+- [x] Error boundary wrapping app
+- [x] Exponential backoff on reconnect (currently fixed 3s)
 
 ---
 
