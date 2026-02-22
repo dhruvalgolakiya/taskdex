@@ -389,6 +389,7 @@ function WorkspaceScreen({
     deliveredCount: number;
   }>>([]);
   const [failedSend, setFailedSend] = useState<{ text: string; error: string } | null>(null);
+  const [workspaceGraphEnabled, setWorkspaceGraphEnabled] = useState(false);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
@@ -418,7 +419,10 @@ function WorkspaceScreen({
     () => activeWorkspace?.threads.find((thread) => thread.id === activeThreadId) || null,
     [activeWorkspace, activeThreadId],
   );
-  const liveWorkspaceGraph = useQuery(api.persistence.getWorkspaceGraph, {});
+  const liveWorkspaceGraph = useQuery(
+    api.persistence.getWorkspaceGraph,
+    workspaceGraphEnabled ? {} : 'skip',
+  );
   const liveThreadMessages = useQuery(
     api.persistence.getMessages,
     activeThreadId ? { threadId: activeThreadId, limit: 50 } : 'skip',
@@ -498,6 +502,11 @@ function WorkspaceScreen({
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setWorkspaceGraphEnabled(true), 240);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -1555,6 +1564,10 @@ function WorkspaceScreen({
   const isAgentWorking = activeAgent?.status === 'working';
   const queuedMessages = activeAgent?.queuedMessages || [];
   const queuedCount = queuedMessages.length;
+  const offlineQueuedCount = useMemo(
+    () => agents.reduce((sum, agent) => sum + (agent.queuedMessages?.length || 0), 0),
+    [agents],
+  );
   const activityCount = useMemo(
     () => activeAgent?.messages.filter((msg) => msg.role === 'agent' && msg.type && msg.type !== 'agent').length || 0,
     [activeAgent],
@@ -1873,6 +1886,13 @@ function WorkspaceScreen({
           ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}${gitStatus?.branch ? ` • ${gitStatus.branch} ${gitStatus.isClean ? 'clean' : 'dirty'}` : ''}`
           : getConnectionLabel(connectionStatus)}
       </Text>
+      {connectionStatus !== 'connected' && (
+        <View style={s.offlineBanner}>
+          <Text style={s.offlineBannerText}>
+            Bridge offline. New messages will queue locally{offlineQueuedCount > 0 ? ` (${offlineQueuedCount} queued)` : ''}.
+          </Text>
+        </View>
+      )}
 
       {searchScope === 'all' && searchQuery.trim().length >= 2 && (
         <View style={s.searchResultsPanel}>
@@ -1931,6 +1951,7 @@ function WorkspaceScreen({
             data={visibleMessages}
             keyExtractor={keyExtractor}
             renderItem={renderChatItem}
+            getItemLayout={(_, index) => ({ length: 104, offset: 104 * index, index })}
             ListHeaderComponent={loadingMoreMessages || activityCount > 0 ? (
               <View>
                 {loadingMoreMessages && (
@@ -1993,6 +2014,7 @@ function WorkspaceScreen({
             initialNumToRender={12}
             maxToRenderPerBatch={8}
             updateCellsBatchingPeriod={32}
+            removeClippedSubviews={true}
             scrollEventThrottle={16}
             onScrollToIndexFailed={(info) => {
               listRef.current?.scrollToOffset({
@@ -3231,6 +3253,21 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     color: colors.textMuted,
     fontSize: 10,
     fontFamily: typography.mono,
+  },
+  offlineBanner: {
+    marginTop: 6,
+    marginHorizontal: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: colors.surfaceSubtle,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  offlineBannerText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontFamily: typography.medium,
   },
   searchRow: {
     marginTop: 8,

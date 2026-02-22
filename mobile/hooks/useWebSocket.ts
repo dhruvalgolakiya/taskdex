@@ -8,7 +8,7 @@ import { useAgentStore } from '../stores/agentStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { startAgentActivity, updateAgentActivity, stopAgentActivity, isLiveActivitySupported } from './useLiveActivity';
 import { persistThreadRecord, persistTurnMetricRecord, persistWorkspaceRecord } from '../lib/convexClient';
-import type { BridgeRequest, BridgeResponse, Agent } from '../types';
+import type { BridgeRequest, BridgeResponse, Agent, MessageType } from '../types';
 
 let requestCounter = 0;
 const STREAM_LOG_LIMIT = 160;
@@ -20,6 +20,8 @@ let globalPending = new Map<string, PendingCallback>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 const queuedDispatchInFlight = new Set<string>();
+const pendingDeltaBuffer = new Map<string, { agentId: string; itemId: string; delta: string; msgType: MessageType }>();
+let pendingDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
 const activeTurnsByAgent = new Map<string, {
   turnId?: string;
   startedAt: number;
@@ -75,6 +77,11 @@ function cleanup() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  if (pendingDeltaFlushTimer) {
+    clearTimeout(pendingDeltaFlushTimer);
+    pendingDeltaFlushTimer = null;
+  }
+  pendingDeltaBuffer.clear();
   if (globalWs) {
     globalWs.onclose = null;
     globalWs.onerror = null;
@@ -90,6 +97,35 @@ function getReconnectDelayMs(): number {
   reconnectAttempt += 1;
   const jitter = Math.floor(Math.random() * 300);
   return base + jitter;
+}
+
+function flushPendingDeltas() {
+  if (pendingDeltaFlushTimer) {
+    clearTimeout(pendingDeltaFlushTimer);
+    pendingDeltaFlushTimer = null;
+  }
+  if (pendingDeltaBuffer.size === 0) return;
+  const store = useAgentStore.getState();
+  for (const entry of pendingDeltaBuffer.values()) {
+    store.appendDelta(entry.agentId, entry.itemId, entry.delta, entry.msgType);
+  }
+  pendingDeltaBuffer.clear();
+}
+
+function queueDelta(agentId: string, itemId: string, delta: string, msgType: MessageType) {
+  const key = `${agentId}:${itemId}`;
+  const existing = pendingDeltaBuffer.get(key);
+  if (existing) {
+    existing.delta += delta;
+    existing.msgType = msgType;
+  } else {
+    pendingDeltaBuffer.set(key, { agentId, itemId, delta, msgType });
+  }
+  if (!pendingDeltaFlushTimer) {
+    pendingDeltaFlushTimer = setTimeout(() => {
+      flushPendingDeltas();
+    }, 60);
+  }
 }
 
 function connectWs(url: string) {
@@ -190,6 +226,9 @@ function syncAgents() {
       const bridgeAgents = res.data as Agent[];
       useAgentStore.getState().mergeWithBridgeAgents(bridgeAgents);
       void reconcileConvexWithBridgeAgents(bridgeAgents);
+      for (const agent of bridgeAgents) {
+        void flushQueuedIfReady(agent.id);
+      }
     }
   });
   globalWs.send(JSON.stringify({ action: 'list_agents', requestId }));
@@ -543,24 +582,25 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       if (d?.itemId && d?.delta) {
         store.updateAgentActivity(agentId, 'Writing response');
         void updateAgentActivity(agentId, 'Writing response');
-        store.appendDelta(agentId, d.itemId, d.delta, 'agent');
+        queueDelta(agentId, d.itemId, d.delta, 'agent');
       }
       break;
     case 'item/reasoning/delta':
       if (d?.itemId && d?.delta) {
         store.updateAgentActivity(agentId, 'Thinking');
         void updateAgentActivity(agentId, 'Thinking');
-        store.appendDelta(agentId, d.itemId, d.delta, 'thinking');
+        queueDelta(agentId, d.itemId, d.delta, 'thinking');
       }
       break;
     case 'item/commandOutput/delta':
       if (d?.itemId && d?.delta) {
         store.updateAgentActivity(agentId, 'Reading command output');
         void updateAgentActivity(agentId, 'Reading command output');
-        store.appendDelta(agentId, d.itemId, d.delta, 'command_output');
+        queueDelta(agentId, d.itemId, d.delta, 'command_output');
       }
       break;
     case 'item/completed': {
+      flushPendingDeltas();
       const item = d?.item;
       if (!item?.id) break;
       const msgType = getMessageType(item.type || '');
@@ -674,6 +714,11 @@ export function useWebSocket() {
       if (!trimmed) return;
 
       const agent = store.agents.find((a) => a.id === agentId);
+      if (store.connectionStatus !== 'connected') {
+        const queuedCount = store.enqueueQueuedMessage(agentId, trimmed);
+        store.updateAgentActivity(agentId, `Offline queue (${queuedCount})`);
+        return;
+      }
       if (agent?.status === 'working') {
         const queuedCount = store.enqueueQueuedMessage(agentId, trimmed);
         store.updateAgentActivity(agentId, `Queued ${queuedCount} message${queuedCount === 1 ? '' : 's'}`);

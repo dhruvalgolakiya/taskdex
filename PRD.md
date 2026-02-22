@@ -272,17 +272,17 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 9.1 Performance
 
-- [ ] Optimize FlatList rendering (getItemLayout, windowSize tuning)
+- [x] Optimize FlatList rendering (getItemLayout, windowSize tuning)
 - [x] Stop saving full message arrays to AsyncStorage on every finalize
-- [ ] Debounce store updates during rapid streaming deltas
-- [ ] Lazy load workspace data
+- [x] Debounce store updates during rapid streaming deltas
+- [x] Lazy load workspace data
 
 ### 9.2 Offline Resilience
 
-- [ ] Detect offline / bridge unreachable
-- [ ] Show clear indicator in header
-- [ ] Queue messages locally, send on reconnect
-- [ ] Show cached messages from Convex offline cache
+- [x] Detect offline / bridge unreachable
+- [x] Show clear indicator in header
+- [x] Queue messages locally, send on reconnect
+- [x] Show cached messages from Convex offline cache
 
 ---
 
