@@ -261,8 +261,10 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 ### 8.2 iOS Widgets
 
 - [ ] Home screen widget: agent status summary (name + status dot)
-- [ ] Deep link: tap widget → opens agent thread
+- [x] Deep link: tap widget → opens agent thread
 - [ ] Requires dev build (WidgetKit native module)
+  - Blocked: WidgetKit home-screen widget still requires native iOS extension/module work not present in this repo.
+  - Need: Add WidgetKit extension + native bridge in iOS project, then wire shared data source for agent status.
 
 ---
 

@@ -14,6 +14,7 @@ import {
   useColorScheme,
   AppState,
   Share,
+  Linking,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -103,6 +104,18 @@ function formatNotificationTimestamp(value: number): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleString();
+}
+
+function extractThreadIdFromUrl(url: string): string | null {
+  const directMatch = url.match(/thread\/([^/?#]+)/i);
+  if (directMatch?.[1]) {
+    return decodeURIComponent(directMatch[1]);
+  }
+  const queryMatch = url.match(/[?&](threadId|agentId)=([^&#]+)/i);
+  if (queryMatch?.[2]) {
+    return decodeURIComponent(queryMatch[2]);
+  }
+  return null;
 }
 
 function guessLanguageFromPath(filePath: string): string {
@@ -673,6 +686,36 @@ function WorkspaceScreen({
     };
   }, [ensureNotificationPermission]);
 
+  const openThreadById = useCallback((threadId: string) => {
+    const wsStore = useWorkspaceStore.getState();
+    for (const workspace of wsStore.workspaces) {
+      const thread = workspace.threads.find((t) => t.id === threadId);
+      if (thread) {
+        wsStore.setActiveWorkspace(workspace.id);
+        wsStore.setActiveThread(workspace.id, threadId);
+        return;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleUrl = ({ url }: { url: string }) => {
+      const threadId = extractThreadIdFromUrl(url || '');
+      if (threadId) openThreadById(threadId);
+    };
+
+    const subscription = Linking.addEventListener('url', handleUrl);
+    Linking.getInitialURL()
+      .then((url) => {
+        if (!url) return;
+        const threadId = extractThreadIdFromUrl(url);
+        if (threadId) openThreadById(threadId);
+      })
+      .catch(() => {});
+
+    return () => subscription.remove();
+  }, [openThreadById]);
+
   // Handle notification actions (reply, stop, open) from lock screen
   useEffect(() => {
     const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
@@ -694,22 +737,13 @@ function WorkspaceScreen({
           break;
         case 'open':
         case Notifications.DEFAULT_ACTION_IDENTIFIER: {
-          // Navigate to the thread when notification is tapped
-          const wsStore = useWorkspaceStore.getState();
-          for (const workspace of wsStore.workspaces) {
-            const thread = workspace.threads.find((t) => t.id === agentId);
-            if (thread) {
-              wsStore.setActiveWorkspace(workspace.id);
-              wsStore.setActiveThread(workspace.id, agentId);
-              break;
-            }
-          }
+          openThreadById(agentId);
           break;
         }
       }
     });
     return () => subscription.remove();
-  }, []);
+  }, [openThreadById]);
 
   useEffect(() => {
     if (!statusBootstrappedRef.current) {
