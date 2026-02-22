@@ -135,6 +135,7 @@ export class AgentManager {
           agentId: id,
           categoryId: 'agent-error',
           priority: 'high',
+          severity: 'error',
         }).catch(() => {});
       }
     });
@@ -361,6 +362,7 @@ export class AgentManager {
             agentId: agent.id,
             categoryId: 'agent-working',
             priority: 'default',
+            severity: 'info',
           }).catch(() => {});
           break;
         }
@@ -384,6 +386,25 @@ export class AgentManager {
             subtitle: 'Hold to reply',
             agentId: agent.id,
             categoryId: 'thread-reply',
+            severity: 'info',
+          }).catch(() => {});
+          break;
+        }
+
+        case 'turn/failed': {
+          agent.status = 'error';
+          const errorMessage = typeof (p.error as Record<string, unknown> | undefined)?.message === 'string'
+            ? String((p.error as Record<string, unknown>).message)
+            : 'Agent turn failed.';
+          this.broadcast(agent.id, 'turn/failed', p);
+          sendPushNotification({
+            title: `${agent.name} — Error`,
+            body: errorMessage,
+            subtitle: 'Tap to open',
+            agentId: agent.id,
+            categoryId: 'agent-error',
+            priority: 'high',
+            severity: 'error',
           }).catch(() => {});
           break;
         }
@@ -407,6 +428,7 @@ export class AgentManager {
                 agentId: agent.id,
                 categoryId: 'file-change',
                 priority: 'default',
+                severity: 'info',
               }).catch(() => {});
             }
           }

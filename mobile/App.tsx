@@ -99,6 +99,12 @@ function getConnectionLabel(status: string) {
   return 'Disconnected from bridge';
 }
 
+function formatNotificationTimestamp(value: number): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString();
+}
+
 function guessLanguageFromPath(filePath: string): string {
   const lower = filePath.toLowerCase();
   if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
@@ -227,6 +233,7 @@ function WorkspaceScreen({
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showCreateThread, setShowCreateThread] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showEditModel, setShowEditModel] = useState(false);
   const [showAgentDashboard, setShowAgentDashboard] = useState(false);
   const [showUsageModal, setShowUsageModal] = useState(false);
@@ -300,6 +307,18 @@ function WorkspaceScreen({
   const [gitBranches, setGitBranches] = useState<string[]>([]);
   const [loadingGit, setLoadingGit] = useState(false);
   const [committingGit, setCommittingGit] = useState(false);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
+  const [notificationPrefs, setNotificationPrefs] = useState<Record<string, 'all' | 'errors' | 'muted'>>({});
+  const [notificationHistory, setNotificationHistory] = useState<Array<{
+    id: string;
+    timestamp: number;
+    agentId: string;
+    title: string;
+    body: string;
+    severity: 'info' | 'error';
+    status: 'sent' | 'muted' | 'no_tokens' | 'error';
+    deliveredCount: number;
+  }>>([]);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
@@ -1285,10 +1304,71 @@ function WorkspaceScreen({
     }
   }, [activeWorkspace?.cwd, refreshGitInfo]);
 
+  const loadNotificationCenterData = useCallback(async () => {
+    setLoadingNotifications(true);
+    try {
+      const [prefsRes, historyRes] = await Promise.all([
+        sendRequest('get_notification_prefs'),
+        sendRequest('list_notification_history', { limit: 120 }),
+      ]);
+
+      if (prefsRes.type === 'response' && prefsRes.data && typeof prefsRes.data === 'object') {
+        const rawPrefs = prefsRes.data as Record<string, string>;
+        const nextPrefs: Record<string, 'all' | 'errors' | 'muted'> = {};
+        for (const [agentId, level] of Object.entries(rawPrefs)) {
+          if (level === 'errors' || level === 'muted') nextPrefs[agentId] = level;
+          else nextPrefs[agentId] = 'all';
+        }
+        setNotificationPrefs(nextPrefs);
+      } else {
+        setNotificationPrefs({});
+      }
+
+      if (historyRes.type === 'response' && Array.isArray(historyRes.data)) {
+        setNotificationHistory(historyRes.data as Array<{
+          id: string;
+          timestamp: number;
+          agentId: string;
+          title: string;
+          body: string;
+          severity: 'info' | 'error';
+          status: 'sent' | 'muted' | 'no_tokens' | 'error';
+          deliveredCount: number;
+        }>);
+      } else {
+        setNotificationHistory([]);
+      }
+    } catch {
+      setNotificationPrefs({});
+      setNotificationHistory([]);
+    } finally {
+      setLoadingNotifications(false);
+    }
+  }, []);
+
+  const handleUpdateNotificationLevel = useCallback(async (agentId: string, level: 'all' | 'errors' | 'muted') => {
+    const previous = notificationPrefs[agentId] || 'all';
+    setNotificationPrefs((current) => ({ ...current, [agentId]: level }));
+    try {
+      const res = await sendRequest('update_notification_prefs', { agentId, level });
+      if (res.type !== 'response') {
+        throw new Error(res.error || 'Failed to update notification preference');
+      }
+    } catch (err: any) {
+      setNotificationPrefs((current) => ({ ...current, [agentId]: previous }));
+      Alert.alert('Notification setting failed', err?.message || 'Could not update notification preference');
+    }
+  }, [notificationPrefs]);
+
   useEffect(() => {
     if (!activeWorkspace?.cwd || connectionStatus !== 'connected') return;
     void refreshGitInfo();
   }, [activeWorkspace?.cwd, connectionStatus, refreshGitInfo]);
+
+  useEffect(() => {
+    if (!showNotificationsModal) return;
+    void loadNotificationCenterData();
+  }, [loadNotificationCenterData, showNotificationsModal]);
 
   const canSend = !!activeAgent
     && connectionStatus === 'connected'
@@ -1328,6 +1408,14 @@ function WorkspaceScreen({
     }
     return labels;
   }, [workspaces]);
+  const notificationRows = useMemo(
+    () => workspaces.flatMap((workspace) =>
+      workspace.threads.map((thread) => ({
+        agentId: thread.id,
+        label: `${workspace.name} · ${thread.title}`,
+      }))),
+    [workspaces],
+  );
   const dashboardAgents = useMemo(() => {
     const metricByAgent = new Map(
       (usageSummary?.agents || []).map((entry: any) => [entry.agentId, entry]),
@@ -1561,6 +1649,12 @@ function WorkspaceScreen({
             style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
           >
             <Text style={s.headerPillText}>Usage</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setShowNotificationsModal(true)}
+            style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
+          >
+            <Text style={s.headerPillText}>Notify</Text>
           </Pressable>
           <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}>
             <Text style={s.headerPillText}>Settings</Text>
@@ -2397,6 +2491,71 @@ function WorkspaceScreen({
             <View style={s.modalActions}>
               <Pressable style={s.cancelBtn} onPress={() => setShowUsageModal(false)}>
                 <Text style={s.cancelText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showNotificationsModal} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Notifications</Text>
+            <Text style={s.label}>Per-agent preferences</Text>
+            <ScrollView style={s.fileListWrap}>
+              {notificationRows.map((row) => {
+                const currentLevel = notificationPrefs[row.agentId] || 'all';
+                return (
+                  <View key={row.agentId} style={s.notificationPrefRow}>
+                    <Text style={s.notificationPrefTitle} numberOfLines={1}>{row.label}</Text>
+                    <View style={s.notificationPrefChips}>
+                      {(['all', 'errors', 'muted'] as const).map((level) => (
+                        <Pressable
+                          key={level}
+                          style={[s.notificationPrefChip, currentLevel === level && s.notificationPrefChipActive]}
+                          onPress={() => void handleUpdateNotificationLevel(row.agentId, level)}
+                        >
+                          <Text style={[s.notificationPrefChipText, currentLevel === level && s.notificationPrefChipTextActive]}>
+                            {level}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
+                  </View>
+                );
+              })}
+              {notificationRows.length === 0 && (
+                <Text style={s.fileHint}>No agents available yet.</Text>
+              )}
+            </ScrollView>
+
+            <Text style={s.label}>History</Text>
+            <ScrollView style={s.fileListWrap}>
+              {loadingNotifications && <Text style={s.fileHint}>Loading notification history...</Text>}
+              {!loadingNotifications && notificationHistory.map((entry) => (
+                <View key={entry.id} style={s.notificationHistoryRow}>
+                  <Text style={s.notificationHistoryTitle} numberOfLines={1}>
+                    {entry.title}
+                  </Text>
+                  <Text style={s.notificationHistoryBody} numberOfLines={2}>
+                    {entry.body}
+                  </Text>
+                  <Text style={s.notificationHistoryMeta} numberOfLines={1}>
+                    {formatNotificationTimestamp(entry.timestamp)} • {entry.severity} • {entry.status} • tokens {entry.deliveredCount}
+                  </Text>
+                </View>
+              ))}
+              {!loadingNotifications && notificationHistory.length === 0 && (
+                <Text style={s.fileHint}>No notifications sent yet.</Text>
+              )}
+            </ScrollView>
+
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setShowNotificationsModal(false)}>
+                <Text style={s.cancelText}>Close</Text>
+              </Pressable>
+              <Pressable style={s.cancelBtn} onPress={() => void loadNotificationCenterData()}>
+                <Text style={s.cancelText}>Refresh</Text>
               </Pressable>
             </View>
           </View>
@@ -3404,6 +3563,64 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 12,
     fontFamily: typography.semibold,
+  },
+  notificationPrefRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 6,
+  },
+  notificationPrefTitle: {
+    color: colors.textPrimary,
+    fontSize: 11,
+    fontFamily: typography.semibold,
+  },
+  notificationPrefChips: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  notificationPrefChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  notificationPrefChipActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
+  notificationPrefChipText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontFamily: typography.medium,
+  },
+  notificationPrefChipTextActive: {
+    color: colors.accent,
+  },
+  notificationHistoryRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 2,
+  },
+  notificationHistoryTitle: {
+    color: colors.textPrimary,
+    fontSize: 11,
+    fontFamily: typography.semibold,
+  },
+  notificationHistoryBody: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontFamily: typography.regular,
+  },
+  notificationHistoryMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: typography.mono,
   },
   modalTitle: {
     color: colors.textPrimary,

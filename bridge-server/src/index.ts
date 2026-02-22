@@ -13,6 +13,10 @@ import {
   getRegisteredTokenCount,
   getRegisteredClientCount,
   removeClientPushTokens,
+  getNotificationPreferences,
+  updateNotificationPreference,
+  getNotificationHistory,
+  type NotificationLevel,
 } from './push';
 
 const PORT = Number(process.env.PORT || 3001);
@@ -354,6 +358,29 @@ wss.on('connection', (ws, req) => {
           }
           registerPushToken(session.clientId, token);
           reply({ ok: true });
+          break;
+        }
+
+        case 'update_notification_prefs': {
+          const { agentId, level } = params as { agentId: string; level: NotificationLevel };
+          if (!agentId?.trim()) throw new Error('agentId is required');
+          const normalizedLevel = (level || 'all').trim().toLowerCase();
+          if (!['all', 'errors', 'muted'].includes(normalizedLevel)) {
+            throw new Error('level must be one of: all, errors, muted');
+          }
+          updateNotificationPreference(agentId.trim(), normalizedLevel as NotificationLevel);
+          reply({ ok: true, agentId: agentId.trim(), level: normalizedLevel });
+          break;
+        }
+
+        case 'get_notification_prefs': {
+          reply(getNotificationPreferences());
+          break;
+        }
+
+        case 'list_notification_history': {
+          const { limit } = params as { limit?: number };
+          reply(getNotificationHistory(typeof limit === 'number' ? limit : 100));
           break;
         }
 

@@ -253,10 +253,10 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 8.1 Notification Preferences
 
-- [ ] Per-agent: all / errors only / muted
-- [ ] Bridge respects mute: don't send push for muted agents
-- [ ] New action: `update_notification_prefs { agentId, level }`
-- [ ] Notification history screen
+- [x] Per-agent: all / errors only / muted
+- [x] Bridge respects mute: don't send push for muted agents
+- [x] New action: `update_notification_prefs { agentId, level }`
+- [x] Notification history screen
 
 ### 8.2 iOS Widgets
 

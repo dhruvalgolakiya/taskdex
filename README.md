@@ -114,6 +114,9 @@ The bridge accepts JSON messages over WebSocket:
 | `update_agent_config` | `{ agentId, model?, approvalPolicy?, systemPrompt? }` | Update agent runtime config |
 | `get_agent` | `{ agentId }` | Get details for a specific agent |
 | `register_push_token` | `{ token }` | Register an Expo push token for notifications |
+| `update_notification_prefs` | `{ agentId, level }` | Set per-agent notifications (`all`, `errors`, `muted`) |
+| `get_notification_prefs` | — | Get current per-agent notification preferences |
+| `list_notification_history` | `{ limit? }` | List recent bridge notification send history |
 | `list_files` | `{ cwd, path }` | List files/directories in workspace |
 | `list_directories` | `{ cwd, path }` | List only directories for cwd browsing |
 | `read_file` | `{ cwd, path }` | Read file contents |
