@@ -7,6 +7,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { promises as fsPromises } from 'fs';
 import simpleGit from 'simple-git';
+import qrcode from 'qrcode-terminal';
 import { AgentManager } from './agent-manager';
 import {
   registerPushToken,
@@ -588,9 +589,14 @@ wss.on('connection', (ws, req) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   const ip = getLocalIP();
+  const networkUrl = `ws://${ip}:${PORT}`;
+  const qrPayload = `pylon://connect?bridgeUrl=${encodeURIComponent(networkUrl)}&apiKey=${encodeURIComponent(config.apiKey)}`;
   console.log('\n  Codex Bridge Server running');
   console.log(`  Local:   ws://localhost:${PORT}`);
-  console.log(`  Network: ws://${ip}:${PORT}`);
+  console.log(`  Network: ${networkUrl}`);
   console.log(`  Config:  ${CONFIG_PATH}`);
   console.log(`  API key: ${config.apiKey}\n`);
+  console.log('  Scan in mobile app (Settings -> Scan QR):');
+  qrcode.generate(qrPayload, { small: true });
+  console.log(`\n  QR payload: ${qrPayload}\n`);
 });

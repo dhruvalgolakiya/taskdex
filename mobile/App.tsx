@@ -25,6 +25,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ConvexProvider, useQuery } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { BarCodeScanner, type BarCodeScannedCallback } from 'expo-barcode-scanner';
 import {
   Manrope_400Regular,
   Manrope_500Medium,
@@ -119,6 +120,28 @@ function extractThreadIdFromUrl(url: string): string | null {
   if (queryMatch?.[2]) {
     return decodeURIComponent(queryMatch[2]);
   }
+  return null;
+}
+
+function parseBridgeQrPayload(raw: string): { bridgeUrl: string; apiKey: string } | null {
+  try {
+    const normalized = raw.trim();
+    const queryMatch = normalized.match(/[?&]bridgeUrl=([^&#]+)/i);
+    const keyMatch = normalized.match(/[?&]apiKey=([^&#]+)/i);
+    if (queryMatch?.[1] && keyMatch?.[1]) {
+      return {
+        bridgeUrl: decodeURIComponent(queryMatch[1]),
+        apiKey: decodeURIComponent(keyMatch[1]),
+      };
+    }
+
+    if (normalized.startsWith('{') && normalized.endsWith('}')) {
+      const parsed = JSON.parse(normalized) as { url?: string; bridgeUrl?: string; key?: string; apiKey?: string };
+      const bridgeUrl = parsed.bridgeUrl || parsed.url || '';
+      const apiKey = parsed.apiKey || parsed.key || '';
+      if (bridgeUrl && apiKey) return { bridgeUrl, apiKey };
+    }
+  } catch {}
   return null;
 }
 
@@ -252,6 +275,8 @@ function WorkspaceScreen({
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
+  const [showQrScanner, setShowQrScanner] = useState(false);
+  const [qrScanEnabled, setQrScanEnabled] = useState(true);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showEditModel, setShowEditModel] = useState(false);
   const [showAgentDashboard, setShowAgentDashboard] = useState(false);
@@ -1101,6 +1126,31 @@ function WorkspaceScreen({
       setShowCreateWorkspace(true);
     }
   }, []);
+
+  const handleOpenQrScanner = useCallback(async () => {
+    const permission = await BarCodeScanner.requestPermissionsAsync();
+    if (permission.status !== 'granted') {
+      Alert.alert('Camera permission required', 'Enable camera access to scan bridge QR codes.');
+      return;
+    }
+    setQrScanEnabled(true);
+    setShowQrScanner(true);
+  }, []);
+
+  const handleBarCodeScanned = useCallback<BarCodeScannedCallback>(({ data }) => {
+    if (!qrScanEnabled) return;
+    setQrScanEnabled(false);
+    const parsed = parseBridgeQrPayload(data || '');
+    if (!parsed) {
+      Alert.alert('Invalid QR', 'QR code does not contain bridge connection data.');
+      setTimeout(() => setQrScanEnabled(true), 800);
+      return;
+    }
+    setUrlInput(parsed.bridgeUrl);
+    setApiKeyInput(parsed.apiKey);
+    setShowQrScanner(false);
+    Alert.alert('Bridge details detected', 'Bridge URL and API key were filled from QR.');
+  }, [qrScanEnabled]);
 
   const handleSendTestNotification = async () => {
     if (sendingTestNotification) return;
@@ -2741,6 +2791,32 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
+      <Modal visible={showQrScanner} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Scan Bridge QR</Text>
+            <Text style={s.themeHint}>Point camera at the QR code shown in bridge terminal output.</Text>
+            <View style={s.qrScannerWrap}>
+              <BarCodeScanner
+                onBarCodeScanned={handleBarCodeScanned}
+                style={StyleSheet.absoluteFillObject}
+              />
+            </View>
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setShowQrScanner(false)}>
+                <Text style={s.cancelText}>Close</Text>
+              </Pressable>
+              <Pressable
+                style={s.cancelBtn}
+                onPress={() => setQrScanEnabled(true)}
+              >
+                <Text style={s.cancelText}>Rescan</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <Modal visible={showSettings} transparent={true} animationType="fade">
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
@@ -2787,6 +2863,12 @@ function WorkspaceScreen({
             </View>
             <Text style={s.themeHint}>Current theme: {resolvedTheme}</Text>
             <View style={s.settingsInlineActions}>
+              <Pressable
+                style={s.cancelBtn}
+                onPress={() => void handleOpenQrScanner()}
+              >
+                <Text style={s.cancelText}>Scan QR</Text>
+              </Pressable>
               <Pressable
                 style={[s.cancelBtn, checkingHealth && s.smallActionBtnDisabled]}
                 onPress={() => void handleCheckBridgeHealth()}
@@ -3843,6 +3925,16 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontSize: 11,
     lineHeight: 16,
     fontFamily: typography.mono,
+  },
+  qrScannerWrap: {
+    marginTop: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    overflow: 'hidden',
+    height: 280,
+    backgroundColor: colors.surfaceSubtle,
+    marginBottom: 8,
   },
   modalTitle: {
     color: colors.textPrimary,

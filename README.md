@@ -49,9 +49,10 @@ This starts the server on port **3001**. You'll see output like:
   Local:   ws://localhost:3001
   Network: ws://192.168.1.42:3001
   API key: <generated-key>
+  [terminal QR code]
 ```
 
-Note the **Network** URL and **API key** — you'll enter both in the mobile app.
+Note the **Network** URL and **API key** — or scan the terminal QR from mobile settings (`Scan QR`) to auto-fill both.
 
 ### Production
 
@@ -172,6 +173,7 @@ npx expo run:android
 - **Interactive replies** — Reply to agents directly from notification (hold/long-press the notification)
 - **Action buttons** — Stop Agent and Open Thread buttons on notifications
 - **Live Activity (iOS)** — Real-time agent status in Dynamic Island and lock screen
+- **QR connect** — Scan bridge terminal QR to auto-fill URL + API key
 - **Dark mode** — Light and dark theme support
 
 ## Remote Access with Tailscale

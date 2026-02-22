@@ -297,9 +297,9 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 10.2 QR Code Connect
 
-- [ ] Bridge prints QR code in terminal on start (encodes ws://ip:port + API key)
-- [ ] Mobile scans QR to auto-fill bridge URL + API key
-- [ ] Uses `expo-barcode-scanner`
+- [x] Bridge prints QR code in terminal on start (encodes ws://ip:port + API key)
+- [x] Mobile scans QR to auto-fill bridge URL + API key
+- [x] Uses `expo-barcode-scanner`
 
 ### 10.3 Haptics & Animations
 

@@ -41,6 +41,12 @@
           "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone for voice input.",
           "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to transcribe speech into messages."
         }
+      ],
+      [
+        "expo-barcode-scanner",
+        {
+          "cameraPermission": "Allow $(PRODUCT_NAME) to scan bridge QR codes."
+        }
       ]
     ]
   }
