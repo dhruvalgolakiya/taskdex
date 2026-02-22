@@ -52,7 +52,8 @@ import { setWidgetSummary, clearWidgetSummary } from 'taskdex-widget-bridge';
 import type { AgentMessage, QueuedMessage, AgentTemplate } from './types';
 import { api } from './convex/_generated/api';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
-import { atomOneDark, atomOneLight } from 'react-syntax-highlighter/styles/hljs';
+import atomOneDark from 'react-syntax-highlighter/styles/hljs/atom-one-dark';
+import atomOneLight from 'react-syntax-highlighter/styles/hljs/atom-one-light';
 import {
   convexClient,
   fetchThreadMessages,

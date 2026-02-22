@@ -3,7 +3,8 @@ import { View, Text, StyleSheet, Linking, Pressable, Animated } from 'react-nati
 import Markdown from 'react-native-markdown-display';
 import * as Clipboard from 'expo-clipboard';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
-import { atomOneDark, atomOneLight } from 'react-syntax-highlighter/styles/hljs';
+import atomOneDark from 'react-syntax-highlighter/styles/hljs/atom-one-dark';
+import atomOneLight from 'react-syntax-highlighter/styles/hljs/atom-one-light';
 import type { AgentMessage } from '../types';
 import type { Palette } from '../theme';
 import { typography } from '../theme';
