@@ -691,7 +691,13 @@ export function useWebSocket() {
   }, [bridgeUrl, bridgeApiKey, clientId]);
 
   const send = useCallback(
-    (action: string, params?: Record<string, unknown>): Promise<BridgeResponse> => sendRequest(action, params),
+    async (action: string, params?: Record<string, unknown>): Promise<BridgeResponse> => {
+      const response = await sendRequest(action, params);
+      if (response.type === 'error') {
+        throw new Error(response.error || `Bridge action failed: ${action}`);
+      }
+      return response;
+    },
     [],
   );
 
