@@ -260,11 +260,10 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 8.2 iOS Widgets
 
-- [ ] Home screen widget: agent status summary (name + status dot)
+- [x] Home screen widget: agent status summary (name + status dot)
 - [x] Deep link: tap widget → opens agent thread
-- [ ] Requires dev build (WidgetKit native module)
-  - Blocked: Home-screen widget still requires native iOS WidgetKit extension/module work not present in this repo.
-  - Need: Add WidgetKit extension + native bridge in iOS project, then wire shared data source for agent status.
+- [x] Requires dev build (WidgetKit native module)
+  - Completed: Added `mobile/modules/pylon-widget-bridge` Expo native module and wired app-group shared widget summary updates from the app.
 
 ---
 

@@ -48,6 +48,7 @@ import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
+import { setWidgetSummary, clearWidgetSummary } from 'pylon-widget-bridge';
 import type { AgentMessage, QueuedMessage, AgentTemplate } from './types';
 import { api } from './convex/_generated/api';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
@@ -1618,6 +1619,25 @@ function WorkspaceScreen({
     }
     return labels;
   }, [workspaces]);
+  useEffect(() => {
+    const byId = new Map(agents.map((agent) => [agent.id, agent]));
+    const summaries = workspaces.flatMap((workspace) =>
+      workspace.threads.map((thread) => {
+        const agent = byId.get(thread.id);
+        return {
+          id: thread.id,
+          name: `${workspace.name} · ${thread.title}`,
+          status: agent?.status || 'stopped',
+          deepLinkUrl: `pylon://thread/${thread.id}`,
+        };
+      }));
+
+    if (summaries.length > 0) {
+      setWidgetSummary(summaries);
+    } else {
+      clearWidgetSummary();
+    }
+  }, [agents, workspaces]);
   const notificationRows = useMemo(
     () => workspaces.flatMap((workspace) =>
       workspace.threads.map((thread) => ({
