@@ -84,7 +84,20 @@ Environment variables used by `docker-compose.yml`:
 - `API_KEY` (required in production)
 - `CODEX_CWD` (container path to workspace, default `/workspace`)
 - `HOST_CODE_DIR` (host path mounted into `CODEX_CWD`)
+- `REPOS_DIR` (path where remote-managed repos are cloned)
+- `AUTO_PULL_REPOS` (`true`/`false`, optional: pull before `create_agent` when cwd is under `REPOS_DIR`)
 - `OPENAI_API_KEY` (required for Codex CLI)
+
+### VPS Deployment (Hetzner + Caddy)
+
+Use the full step-by-step guide in `docs/vps-hetzner.md`:
+
+- Hetzner server provisioning
+- Docker installation and bridge deployment
+- SSH deploy key setup for private repo cloning
+- Caddy reverse proxy for `wss://...`
+- systemd/PM2 service persistence
+- Optional auto-pull before agent start
 
 ### API
 
@@ -110,6 +123,9 @@ The bridge accepts JSON messages over WebSocket:
 | `git_commit` | `{ cwd, message }` | Commit all current changes |
 | `git_branches` | `{ cwd }` | List local branches |
 | `git_checkout` | `{ cwd, branch }` | Switch to local branch |
+| `clone_repo` | `{ url }` | Clone repository to bridge `REPOS_DIR` |
+| `list_repos` | — | List cloned repositories with paths/remotes |
+| `pull_repo` | `{ path }` | Pull latest changes for a cloned repo |
 
 The bridge streams events back to the mobile app (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
 

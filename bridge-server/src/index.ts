@@ -118,6 +118,33 @@ function repoNameFromUrl(url: string): string {
   return base.replace(/\.git$/i, '') || 'repo';
 }
 
+function parseBooleanEnv(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on';
+}
+
+async function maybeAutoPullRepo(cwd: string): Promise<void> {
+  if (!parseBooleanEnv(process.env.AUTO_PULL_REPOS)) return;
+
+  const reposRoot = getReposRoot();
+  let safePath: string;
+  try {
+    safePath = resolveWithinBase(reposRoot, cwd);
+  } catch {
+    return;
+  }
+
+  if (!fs.existsSync(path.join(safePath, '.git'))) return;
+
+  try {
+    await simpleGit({ baseDir: safePath }).pull();
+    console.log(`[bridge] Auto-pulled repo before agent start: ${safePath}`);
+  } catch (err) {
+    console.warn(`[bridge] Auto-pull failed for ${safePath}:`, err);
+  }
+}
+
 function gitForCwd(cwd: string) {
   return simpleGit({
     baseDir: path.resolve(cwd || process.cwd()),
@@ -256,10 +283,12 @@ wss.on('connection', (ws, req) => {
             systemPrompt?: string;
           };
           const defaultCwd = process.env.CODEX_CWD || process.cwd();
+          const resolvedCwd = cwd || defaultCwd;
+          await maybeAutoPullRepo(resolvedCwd);
           const agent = await manager.createAgent(
             name || 'Agent',
             model || 'gpt-5.1-codex',
-            cwd || defaultCwd,
+            resolvedCwd,
             approvalPolicy || 'never',
             systemPrompt || '',
           );

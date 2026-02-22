@@ -216,11 +216,11 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 6.2 VPS Setup Guide
 
-- [ ] Hetzner: create server, install Docker, clone repos, deploy bridge
-- [ ] SSH key / deploy key setup so bridge machine can `git clone` your repos
-- [ ] Reverse proxy (Caddy) for WSS (secure WebSocket over HTTPS)
-- [ ] PM2 / systemd to keep bridge alive
-- [ ] Auto-pull repos before agent start (optional)
+- [x] Hetzner: create server, install Docker, clone repos, deploy bridge
+- [x] SSH key / deploy key setup so bridge machine can `git clone` your repos
+- [x] Reverse proxy (Caddy) for WSS (secure WebSocket over HTTPS)
+- [x] PM2 / systemd to keep bridge alive
+- [x] Auto-pull repos before agent start (optional)
 
 ### 6.3 Remote Repo Management
 
