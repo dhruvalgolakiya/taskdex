@@ -1,4 +1,4 @@
-# Pylon Bridge VPS Setup (Hetzner)
+# Taskdex Bridge VPS Setup (Hetzner)
 
 This guide deploys the bridge to a Hetzner Ubuntu server with Docker, Caddy (WSS), and systemd.
 
@@ -35,8 +35,8 @@ Use a dedicated deploy key on the server:
 
 ```bash
 mkdir -p /root/.ssh && chmod 700 /root/.ssh
-ssh-keygen -t ed25519 -C "pylon-bridge" -f /root/.ssh/pylon_bridge -N ""
-cat /root/.ssh/pylon_bridge.pub
+ssh-keygen -t ed25519 -C "taskdex-bridge" -f /root/.ssh/taskdex_bridge -N ""
+cat /root/.ssh/taskdex_bridge.pub
 ```
 
 1. Add the printed public key as a read-only deploy key on each GitHub repo.
@@ -47,7 +47,7 @@ cat >> /root/.ssh/config <<'CFG'
 Host github.com
   HostName github.com
   User git
-  IdentityFile /root/.ssh/pylon_bridge
+  IdentityFile /root/.ssh/taskdex_bridge
   IdentitiesOnly yes
 CFG
 chmod 600 /root/.ssh/config
@@ -57,10 +57,10 @@ ssh -T git@github.com
 ## 3. Clone app and configure env
 
 ```bash
-mkdir -p /opt/pylon
-cd /opt/pylon
-git clone git@github.com:dhruvalgolakiya/pylon.git
-cd pylon
+mkdir -p /opt/taskdex
+cd /opt/taskdex
+git clone git@github.com:dhruvalgolakiya/taskdex.git
+cd taskdex
 ```
 
 Create `.env`:
@@ -72,7 +72,7 @@ API_KEY=<set-strong-random-key>
 OPENAI_API_KEY=<your-openai-key>
 HOST_CODE_DIR=/opt/repos
 CODEX_CWD=/workspace
-REPOS_DIR=/root/.pylon/repos
+REPOS_DIR=/root/.taskdex/repos
 AUTO_PULL_REPOS=true
 ENV
 ```
@@ -86,7 +86,7 @@ mkdir -p /opt/repos
 ## 4. Start bridge with Docker
 
 ```bash
-cd /opt/pylon/pylon
+cd /opt/taskdex/taskdex
 docker compose up -d --build
 docker compose ps
 docker compose logs -f bridge
@@ -139,10 +139,10 @@ If you do not want Docker, use PM2 instead:
 
 ```bash
 npm install -g pm2
-cd /opt/pylon/pylon/bridge-server
+cd /opt/taskdex/taskdex/bridge-server
 npm ci
 npm run build
-pm2 start "npm start" --name pylon-bridge
+pm2 start "npm start" --name taskdex-bridge
 pm2 save
 pm2 startup
 ```

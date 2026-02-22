@@ -48,7 +48,7 @@ import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
-import { setWidgetSummary, clearWidgetSummary } from 'pylon-widget-bridge';
+import { setWidgetSummary, clearWidgetSummary } from 'taskdex-widget-bridge';
 import type { AgentMessage, QueuedMessage, AgentTemplate } from './types';
 import { api } from './convex/_generated/api';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
@@ -101,7 +101,7 @@ Notifications.setNotificationHandler({
   },
 });
 
-const ONBOARDING_DONE_KEY = 'pylon_onboarding_done_v1';
+const ONBOARDING_DONE_KEY = 'taskdex_onboarding_done_v1';
 const BRIDGE_START_COMMAND = 'cd /path/to/codex-mobile/bridge-server && npm install && npm run dev';
 
 function getConnectionLabel(status: string) {
@@ -1224,7 +1224,7 @@ function WorkspaceScreen({
       await Notifications.scheduleNotificationAsync({
         content: {
           title: 'Test notification',
-          body: 'Pylon mobile notifications are working.',
+          body: 'Taskdex mobile notifications are working.',
           sound: true,
           data: { kind: 'test' },
           ...(Platform.OS === 'android' ? { channelId: 'thread-updates' } : {}),
@@ -1630,7 +1630,7 @@ function WorkspaceScreen({
           id: thread.id,
           name: `${workspace.name} · ${thread.title}`,
           status: agent?.status || 'stopped',
-          deepLinkUrl: `pylon://thread/${thread.id}`,
+          deepLinkUrl: `taskdex://thread/${thread.id}`,
         };
       }));
 
@@ -1841,7 +1841,7 @@ function WorkspaceScreen({
             <Ionicons name="chatbubbles-outline" size={16} color={colors.background} />
           </Pressable>
           <View style={{ flex: 1 }}>
-            <Text style={s.headerTitle}>Pylon</Text>
+            <Text style={s.headerTitle}>Taskdex</Text>
             <Text style={s.topSub} numberOfLines={1}>
               {activeWorkspace ? `${activeWorkspace.name} · ${activeThread?.title || 'No thread'}` : 'No workspace selected'}
             </Text>
@@ -2209,7 +2209,7 @@ function WorkspaceScreen({
       <Modal visible={showOnboarding} transparent={true} animationType="fade" onRequestClose={() => setShowOnboarding(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Welcome to Pylon</Text>
+            <Text style={s.modalTitle}>Welcome to Taskdex</Text>
             <View style={s.onboardingDots}>
               {[0, 1, 2].map((step) => (
                 <View key={step} style={[s.onboardingDot, onboardingStep === step && s.onboardingDotActive]} />
@@ -2220,7 +2220,7 @@ function WorkspaceScreen({
               <View style={s.onboardingStepWrap}>
                 <Text style={s.onboardingStepTitle}>Control Codex agents from your phone</Text>
                 <Text style={s.onboardingStepBody}>
-                  Pylon has two parts: this mobile app and a bridge server running where your code lives.
+                  Taskdex has two parts: this mobile app and a bridge server running where your code lives.
                 </Text>
                 <Text style={s.onboardingStepBody}>
                   This walkthrough will help you start the bridge, verify connection, and create your first agent.

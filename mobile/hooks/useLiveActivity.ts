@@ -41,7 +41,7 @@ export async function startAgentActivity(agentId: string, agentName: string, sta
         },
       },
       {
-        deepLinkUrl: `pylon://thread/${agentId}`,
+        deepLinkUrl: `taskdex://thread/${agentId}`,
       },
     );
     if (activityId) {

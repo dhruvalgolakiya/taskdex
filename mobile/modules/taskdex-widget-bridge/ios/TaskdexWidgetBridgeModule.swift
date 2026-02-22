@@ -2,12 +2,12 @@ import ExpoModulesCore
 import WidgetKit
 
 private let appGroupIdentifier = "group.expoLiveActivity.sharedData"
-private let summaryStorageKey = "pylon_widget_agents_v1"
-private let summaryUpdatedAtKey = "pylon_widget_agents_updated_at"
+private let summaryStorageKey = "taskdex_widget_agents_v1"
+private let summaryUpdatedAtKey = "taskdex_widget_agents_updated_at"
 
-public class PylonWidgetBridgeModule: Module {
+public class TaskdexWidgetBridgeModule: Module {
   public func definition() -> ModuleDefinition {
-    Name("PylonWidgetBridge")
+    Name("TaskdexWidgetBridge")
 
     Function("setSummaryJson") { (summaryJson: String) -> Bool in
       guard let defaults = UserDefaults(suiteName: appGroupIdentifier) else {

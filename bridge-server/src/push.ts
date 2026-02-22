@@ -6,7 +6,7 @@ import os from 'os';
 import path from 'path';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const CONFIG_DIR = path.join(os.homedir(), '.pylon');
+const CONFIG_DIR = path.join(os.homedir(), '.taskdex');
 const NOTIFICATION_PREFS_PATH = path.join(CONFIG_DIR, 'notification-prefs.json');
 const MAX_HISTORY = 200;
 

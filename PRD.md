@@ -1,8 +1,8 @@
-# Pylon — Product Requirements Document
+# Taskdex — Product Requirements Document
 
-## What Pylon Actually Is
+## What Taskdex Actually Is
 
-Pylon is a mobile app that remote-controls OpenAI Codex coding agents. It has two parts:
+Taskdex is a mobile app that remote-controls OpenAI Codex coding agents. It has two parts:
 
 1. **Bridge server** (Node.js) — runs on your machine where the code lives. Spawns `codex app-server` child processes, communicates via JSON-RPC over stdio, and exposes a WebSocket API.
 2. **Mobile app** (React Native/Expo) — connects to the bridge over WebSocket. Sends messages, receives streaming responses, manages workspaces/threads.
@@ -92,7 +92,7 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 ### 2.1 API Key Auth
 
 - [x] Bridge generates a random API key on first start, prints it to terminal
-- [x] Save API key to `~/.pylon/config.json` on bridge machine
+- [x] Save API key to `~/.taskdex/config.json` on bridge machine
 - [x] Mobile enters API key during bridge setup (one-time)
 - [x] WebSocket handshake: first message must be `{ action: 'auth', params: { key: '...' } }`
 - [x] Bridge rejects and disconnects clients that fail auth
@@ -174,7 +174,7 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 - [x] Currently: stopped agents recreate on send — works but creates new threadId
 - [x] Better: bridge saves agent state to disk, restores on restart
-- [x] Bridge writes `~/.pylon/agents.json` on agent create/stop
+- [x] Bridge writes `~/.taskdex/agents.json` on agent create/stop
 - [x] On bridge start: read saved agents, reconnect where possible
 - [x] Mobile detects restored agents via `list_agents` merge
 
@@ -263,7 +263,7 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 - [x] Home screen widget: agent status summary (name + status dot)
 - [x] Deep link: tap widget → opens agent thread
 - [x] Requires dev build (WidgetKit native module)
-  - Completed: Added `mobile/modules/pylon-widget-bridge` Expo native module and wired app-group shared widget summary updates from the app.
+  - Completed: Added `mobile/modules/taskdex-widget-bridge` Expo native module and wired app-group shared widget summary updates from the app.
 
 ---
 

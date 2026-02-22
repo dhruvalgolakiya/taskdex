@@ -46,7 +46,7 @@ const CYAN = '\x1b[36m';
 const RED = '\x1b[31m';
 const BG_BLUE = '\x1b[44m';
 const WHITE = '\x1b[37m';
-const AGENTS_STATE_PATH = path.join(os.homedir(), '.pylon', 'agents.json');
+const AGENTS_STATE_PATH = path.join(os.homedir(), '.taskdex', 'agents.json');
 
 interface PersistedAgent {
   id: string;

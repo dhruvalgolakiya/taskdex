@@ -1,13 +1,13 @@
 {
   "expo": {
-    "name": "Pylon",
-    "slug": "pylon",
+    "name": "Taskdex",
+    "slug": "taskdex",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "scheme": "pylon",
+    "scheme": "taskdex",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
@@ -22,7 +22,7 @@
         "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to use the microphone for voice input."
       },
       "entitlements": {},
-      "bundleIdentifier": "com.dhruvalg.pylon"
+      "bundleIdentifier": "com.dhruvalg.taskdex"
     },
     "android": {
       "adaptiveIcon": {
@@ -34,7 +34,7 @@
         "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA"
       ],
-      "package": "com.dhruvalg.pylon"
+      "package": "com.dhruvalg.taskdex"
     },
     "web": {
       "bundler": "metro",

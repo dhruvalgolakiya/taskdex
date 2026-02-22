@@ -21,7 +21,7 @@ import {
 } from './push';
 
 const PORT = Number(process.env.PORT || 3001);
-const CONFIG_DIR = path.join(os.homedir(), '.pylon');
+const CONFIG_DIR = path.join(os.homedir(), '.taskdex');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.json');
 
 interface BridgeConfig {
@@ -103,7 +103,7 @@ function resolveWithinCwd(cwd: string, relativePath?: string): string {
 function getReposRoot(): string {
   const root = process.env.REPOS_DIR
     ? path.resolve(process.env.REPOS_DIR)
-    : path.join(os.homedir(), '.pylon', 'repos');
+    : path.join(os.homedir(), '.taskdex', 'repos');
   fs.mkdirSync(root, { recursive: true });
   return root;
 }
@@ -484,7 +484,7 @@ wss.on('connection', (ws, req) => {
           const { cwd, message } = params as { cwd: string; message: string };
           const git = gitForCwd(cwd || process.cwd());
           await git.add('.');
-          const result = await git.commit(message || 'chore: update via pylon mobile');
+          const result = await git.commit(message || 'chore: update via taskdex mobile');
           reply(result);
           break;
         }
@@ -590,7 +590,7 @@ wss.on('connection', (ws, req) => {
 server.listen(PORT, '0.0.0.0', () => {
   const ip = getLocalIP();
   const networkUrl = `ws://${ip}:${PORT}`;
-  const qrPayload = `pylon://connect?bridgeUrl=${encodeURIComponent(networkUrl)}&apiKey=${encodeURIComponent(config.apiKey)}`;
+  const qrPayload = `taskdex://connect?bridgeUrl=${encodeURIComponent(networkUrl)}&apiKey=${encodeURIComponent(config.apiKey)}`;
   console.log('\n  Codex Bridge Server running');
   console.log(`  Local:   ws://localhost:${PORT}`);
   console.log(`  Network: ${networkUrl}`);

@@ -15,7 +15,7 @@ export type AgentWidgetSummary = {
 };
 
 const nativeModule: WidgetBridgeModule | null = Platform.OS === 'ios'
-  ? requireNativeModule<WidgetBridgeModule>('PylonWidgetBridge')
+  ? requireNativeModule<WidgetBridgeModule>('TaskdexWidgetBridge')
   : null;
 
 export function setWidgetSummary(agents: AgentWidgetSummary[]) {
@@ -27,7 +27,7 @@ export function setWidgetSummary(agents: AgentWidgetSummary[]) {
       id: entry.id,
       name: entry.name,
       status: entry.status || 'stopped',
-      deepLinkUrl: entry.deepLinkUrl || `pylon://thread/${entry.id}`,
+      deepLinkUrl: entry.deepLinkUrl || `taskdex://thread/${entry.id}`,
     }));
   nativeModule.setSummaryJson(JSON.stringify(normalized));
 }
