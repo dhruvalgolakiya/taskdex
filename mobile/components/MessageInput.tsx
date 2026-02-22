@@ -1,6 +1,7 @@
-import React, { useMemo, useState, useEffect } from 'react';
-import { View, Text, TextInput, Pressable, StyleSheet, ScrollView } from 'react-native';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
+import { View, Text, TextInput, Pressable, StyleSheet, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from 'expo-speech-recognition';
 import type { Palette } from '../theme';
 import { typography } from '../theme';
 
@@ -29,6 +30,40 @@ export function MessageInput({
   const [text, setText] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const [voiceAvailable, setVoiceAvailable] = useState(false);
+  const voiceBaseTextRef = useRef('');
+
+  useEffect(() => {
+    setVoiceAvailable(ExpoSpeechRecognitionModule.isRecognitionAvailable());
+  }, []);
+
+  useSpeechRecognitionEvent('start', () => {
+    setIsListening(true);
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setIsListening(false);
+  });
+
+  useSpeechRecognitionEvent('result', (event) => {
+    const transcript = event.results[0]?.transcript?.trim();
+    if (!transcript) return;
+    const base = voiceBaseTextRef.current.trim();
+    const merged = base ? `${base} ${transcript}` : transcript;
+    setText(merged);
+  });
+
+  useSpeechRecognitionEvent('error', (event) => {
+    setIsListening(false);
+    Alert.alert('Voice input error', event.message || 'Speech recognition failed');
+  });
+
+  useEffect(() => () => {
+    try {
+      ExpoSpeechRecognitionModule.abort();
+    } catch {}
+  }, []);
 
   useEffect(() => {
     if (!onResolveFileMentions) return;
@@ -63,11 +98,40 @@ export function MessageInput({
     setSuggestions([]);
   };
 
+  const handleMicPress = useCallback(async () => {
+    if (disabled || !voiceAvailable) return;
+
+    if (isListening) {
+      ExpoSpeechRecognitionModule.stop();
+      return;
+    }
+
+    try {
+      const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert('Microphone permission required', 'Enable microphone and speech recognition permissions to use voice input.');
+        return;
+      }
+      voiceBaseTextRef.current = text.trim();
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-US',
+        interimResults: true,
+        continuous: false,
+        addsPunctuation: true,
+      });
+    } catch (err: any) {
+      Alert.alert('Voice input unavailable', err?.message || 'Could not start speech recognition');
+    }
+  }, [disabled, isListening, text, voiceAvailable]);
+
   const handlePrimaryAction = () => {
     const trimmed = text.trim();
     if (trimmed && !disabled) {
       onSend(trimmed);
       setText('');
+      if (isListening) {
+        ExpoSpeechRecognitionModule.stop();
+      }
       return;
     }
     if (isWorking) {
@@ -111,6 +175,23 @@ export function MessageInput({
           <View style={styles.queueBadge}>
             <Text style={styles.queueBadgeText}>{Math.min(queueCount, 99)}</Text>
           </View>
+        )}
+        {voiceAvailable && (
+          <Pressable
+            style={[
+              styles.micBtn,
+              isListening && styles.micBtnActive,
+              (disabled || !voiceAvailable) && styles.sendBtnDisabled,
+            ]}
+            onPress={() => void handleMicPress()}
+            disabled={!!disabled || !voiceAvailable}
+          >
+            <Ionicons
+              name={isListening ? 'stop' : 'mic-outline'}
+              size={17}
+              color={colors.background}
+            />
+          </Pressable>
         )}
         <Pressable
           style={[
@@ -179,6 +260,18 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   },
   sendBtnInterrupt: {
     backgroundColor: colors.textSecondary,
+  },
+  micBtn: {
+    marginLeft: 10,
+    backgroundColor: colors.textSecondary,
+    borderRadius: 999,
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  micBtnActive: {
+    backgroundColor: colors.errorSoft,
   },
   sendBtnDisabled: {
     backgroundColor: colors.textMuted,

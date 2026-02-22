@@ -34,7 +34,14 @@
     },
     "plugins": [
       "expo-notifications",
-      "expo-live-activity"
+      "expo-live-activity",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to use the microphone for voice input.",
+          "speechRecognitionPermission": "Allow $(PRODUCT_NAME) to transcribe speech into messages."
+        }
+      ]
     ]
   }
 }

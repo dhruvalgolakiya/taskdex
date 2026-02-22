@@ -140,9 +140,8 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 - [x] Slash commands: `/stop` (interrupt), `/clear` (clear thread display)
 - [x] `@filename` mention — bridge action `list_files` returns cwd contents for autocomplete
-- [ ] Voice input via expo-speech (mic button)
-  - Blocked: `expo-speech` is text-to-speech only, not speech-to-text.
-  - Need: Replace requirement with speech-recognition package/API choice, then wire mic capture into message input.
+- [x] Voice input via speech recognition (mic button)
+  - Implemented with `expo-speech-recognition` mic toggle in chat input.
 
 ---
 
@@ -341,7 +340,7 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 | File browser | New bridge actions (Node.js `fs`) |
 | Git | `simple-git` on bridge |
 | QR code | `expo-barcode-scanner` |
-| Voice input | `expo-speech` |
+| Voice input | `expo-speech-recognition` |
 | Containers | Docker + docker-compose |
 | Process manager | PM2 / systemd |
 | Reverse proxy | Caddy (WSS) |
