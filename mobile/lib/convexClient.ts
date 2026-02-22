@@ -100,6 +100,21 @@ interface TemplateRecordInput {
   createdAt: number;
 }
 
+interface TurnMetricRecordInput {
+  id: string;
+  threadId: string;
+  agentId: string;
+  model: string;
+  startedAt: number;
+  completedAt: number;
+  responseTimeMs: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  estimatedCostUsd?: number;
+  hadError?: boolean;
+}
+
 export async function fetchThreadMessages(
   threadId: string,
   params: FetchThreadMessagesParams = {},
@@ -161,6 +176,14 @@ export async function deleteTemplateRecord(id: string): Promise<void> {
     await convexClient.mutation(api.persistence.deleteTemplate, { id });
   } catch {
     // Best-effort delete.
+  }
+}
+
+export async function persistTurnMetricRecord(input: TurnMetricRecordInput): Promise<void> {
+  try {
+    await convexClient.mutation(api.persistence.saveTurnMetric, input);
+  } catch {
+    // Best-effort persistence; metrics can be recomputed from future turns.
   }
 }
 

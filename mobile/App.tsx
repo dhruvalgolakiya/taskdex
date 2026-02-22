@@ -229,6 +229,7 @@ function WorkspaceScreen({
   const [showSettings, setShowSettings] = useState(false);
   const [showEditModel, setShowEditModel] = useState(false);
   const [showAgentDashboard, setShowAgentDashboard] = useState(false);
+  const [showUsageModal, setShowUsageModal] = useState(false);
   const [agentDashboardFilter, setAgentDashboardFilter] = useState<'all' | 'active' | 'stopped'>('all');
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedWorkspaceId, setExpandedWorkspaceId] = useState<string | null>(null);
@@ -324,6 +325,7 @@ function WorkspaceScreen({
       ? { query: searchQuery.trim() }
       : 'skip',
   );
+  const usageSummary = useQuery(api.persistence.getUsageSummary, {});
   const activeAgent = useAgentStore(
     useCallback((state) => {
       if (!activeThreadId) return null;
@@ -1317,11 +1319,24 @@ function WorkspaceScreen({
     if (lastAgentMessage?.type === 'command' || lastAgentMessage?.type === 'command_output') return 'Running';
     return 'Typing';
   }, [activeAgent]);
+  const threadLabelById = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const workspace of workspaces) {
+      for (const thread of workspace.threads) {
+        labels.set(thread.id, `${workspace.name} · ${thread.title}`);
+      }
+    }
+    return labels;
+  }, [workspaces]);
   const dashboardAgents = useMemo(() => {
+    const metricByAgent = new Map(
+      (usageSummary?.agents || []).map((entry: any) => [entry.agentId, entry]),
+    );
     const byId = new Map(agents.map((agent) => [agent.id, agent]));
     const rows = workspaces.flatMap((workspace) =>
       workspace.threads.map((thread) => {
         const agent = byId.get(thread.id);
+        const metric = metricByAgent.get(thread.id);
         const lastMessage = [...(agent?.messages || [])].reverse()[0];
         const lastTimestamp = lastMessage?.timestamp || thread.createdAt;
         return {
@@ -1333,6 +1348,9 @@ function WorkspaceScreen({
           status: agent?.status || 'stopped',
           lastPreview: (lastMessage?.text || '').replace(/\s+/g, ' ').trim().slice(0, 90),
           minutesAgo: Math.max(0, Math.round((Date.now() - lastTimestamp) / 60000)),
+          averageResponseMs: typeof metric?.averageResponseMs === 'number' ? metric.averageResponseMs : 0,
+          errorCount: typeof metric?.errorCount === 'number' ? metric.errorCount : 0,
+          activeTimeMs: typeof metric?.activeTimeMs === 'number' ? metric.activeTimeMs : 0,
         };
       }),
     );
@@ -1341,7 +1359,7 @@ function WorkspaceScreen({
       if (agentDashboardFilter === 'stopped') return row.status === 'stopped';
       return true;
     });
-  }, [agentDashboardFilter, agents, workspaces]);
+  }, [agentDashboardFilter, agents, usageSummary?.agents, workspaces]);
 
   const handleOpenDashboardThread = useCallback((workspaceId: string, threadId: string) => {
     setActiveWorkspace(workspaceId);
@@ -1537,6 +1555,12 @@ function WorkspaceScreen({
             style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
           >
             <Text style={s.headerPillText}>Agents</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setShowUsageModal(true)}
+            style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
+          >
+            <Text style={s.headerPillText}>Usage</Text>
           </Pressable>
           <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}>
             <Text style={s.headerPillText}>Settings</Text>
@@ -2297,6 +2321,9 @@ function WorkspaceScreen({
                   <Text style={s.dashboardMeta} numberOfLines={1}>
                     {row.model} • {row.status} • {row.minutesAgo}m ago
                   </Text>
+                  <Text style={s.dashboardMetricLine} numberOfLines={1}>
+                    avg {(row.averageResponseMs / 1000).toFixed(1)}s • errors {row.errorCount} • active {Math.round(row.activeTimeMs / 60000)}m
+                  </Text>
                   {!!row.lastPreview && (
                     <Text style={s.dashboardPreview} numberOfLines={2}>
                       {row.lastPreview}
@@ -2308,6 +2335,67 @@ function WorkspaceScreen({
             </ScrollView>
             <View style={s.modalActions}>
               <Pressable style={s.cancelBtn} onPress={() => setShowAgentDashboard(false)}>
+                <Text style={s.cancelText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showUsageModal} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Usage Analytics</Text>
+            <View style={s.usageSummaryGrid}>
+              <View style={s.usageSummaryCard}>
+                <Text style={s.usageSummaryLabel}>Messages (today)</Text>
+                <Text style={s.usageSummaryValue}>{usageSummary?.messagesSentToday ?? 0}</Text>
+              </View>
+              <View style={s.usageSummaryCard}>
+                <Text style={s.usageSummaryLabel}>Messages (7d)</Text>
+                <Text style={s.usageSummaryValue}>{usageSummary?.messagesSentWeek ?? 0}</Text>
+              </View>
+              <View style={s.usageSummaryCard}>
+                <Text style={s.usageSummaryLabel}>Turns (today)</Text>
+                <Text style={s.usageSummaryValue}>{usageSummary?.today?.turns ?? 0}</Text>
+              </View>
+              <View style={s.usageSummaryCard}>
+                <Text style={s.usageSummaryLabel}>Turns (7d)</Text>
+                <Text style={s.usageSummaryValue}>{usageSummary?.week?.turns ?? 0}</Text>
+              </View>
+            </View>
+
+            <View style={s.usageCostBox}>
+              <Text style={s.usageCostText}>
+                Est. cost today: ${(usageSummary?.today?.estimatedCostUsd ?? 0).toFixed(4)}
+              </Text>
+              <Text style={s.usageCostText}>
+                Est. cost 7d: ${(usageSummary?.week?.estimatedCostUsd ?? 0).toFixed(4)}
+              </Text>
+            </View>
+
+            <Text style={s.label}>Active Time per Agent (7d)</Text>
+            <ScrollView style={s.fileListWrap}>
+              {(usageSummary?.agents || []).map((entry: any) => (
+                <View key={entry.agentId} style={s.usageAgentRow}>
+                  <View style={s.usageAgentMeta}>
+                    <Text style={s.usageAgentTitle} numberOfLines={1}>
+                      {threadLabelById.get(entry.agentId) || entry.agentId}
+                    </Text>
+                    <Text style={s.usageAgentSub} numberOfLines={1}>
+                      {entry.model} • turns {entry.turns} • errors {entry.errorCount}
+                    </Text>
+                  </View>
+                  <Text style={s.usageAgentTime}>{Math.round((entry.activeTimeMs || 0) / 60000)}m</Text>
+                </View>
+              ))}
+              {(usageSummary?.agents || []).length === 0 && (
+                <Text style={s.fileHint}>No turn metrics yet. Send messages to start tracking.</Text>
+              )}
+            </ScrollView>
+
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setShowUsageModal(false)}>
                 <Text style={s.cancelText}>Close</Text>
               </Pressable>
             </View>
@@ -3237,11 +3325,85 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontSize: 10,
     fontFamily: typography.mono,
   },
+  dashboardMetricLine: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: typography.medium,
+  },
   dashboardPreview: {
     color: colors.textSecondary,
     fontSize: 11,
     lineHeight: 15,
     fontFamily: typography.medium,
+  },
+  usageSummaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  usageSummaryCard: {
+    width: '48%',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  usageSummaryLabel: {
+    color: colors.textMuted,
+    fontSize: 10,
+    marginBottom: 2,
+    fontFamily: typography.medium,
+  },
+  usageSummaryValue: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontFamily: typography.semibold,
+  },
+  usageCostBox: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: colors.surfaceSubtle,
+    marginBottom: 10,
+    gap: 2,
+  },
+  usageCostText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontFamily: typography.mono,
+  },
+  usageAgentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  usageAgentMeta: {
+    flex: 1,
+    gap: 2,
+  },
+  usageAgentTitle: {
+    color: colors.textPrimary,
+    fontSize: 11,
+    fontFamily: typography.semibold,
+  },
+  usageAgentSub: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: typography.mono,
+  },
+  usageAgentTime: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontFamily: typography.semibold,
   },
   modalTitle: {
     color: colors.textPrimary,

@@ -236,16 +236,16 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 7.1 Usage Tracking
 
-- [ ] Parse token counts from codex turn responses (if available in JSON-RPC)
-- [ ] Store per-turn: model, tokens, response time, in Convex
-- [ ] Simple usage screen: messages sent today/week, active time per agent
-- [ ] Cost estimate based on model
+- [x] Parse token counts from codex turn responses (if available in JSON-RPC)
+- [x] Store per-turn: model, tokens, response time, in Convex
+- [x] Simple usage screen: messages sent today/week, active time per agent
+- [x] Cost estimate based on model
 
 ### 7.2 Agent Metrics
 
-- [ ] Response time per turn (measure turn/started → turn/completed delta)
-- [ ] Error count per agent
-- [ ] Metric display on agent cards
+- [x] Response time per turn (measure turn/started → turn/completed delta)
+- [x] Error count per agent
+- [x] Metric display on agent cards
 
 ---
 

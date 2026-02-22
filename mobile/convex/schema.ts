@@ -76,10 +76,30 @@ export default defineSchema({
     .index("by_message_id", ["id"])
     .index("by_threadId", ["threadId"])
     .index("by_thread_timestamp", ["threadId", "timestamp"])
+    .index("by_timestamp", ["timestamp"])
     .searchIndex("search_text", {
       searchField: "text",
       filterFields: ["threadId"],
     }),
+
+  turnMetrics: defineTable({
+    id: v.string(),
+    threadId: v.string(),
+    agentId: v.string(),
+    model: v.string(),
+    startedAt: v.number(),
+    completedAt: v.number(),
+    responseTimeMs: v.number(),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    totalTokens: v.optional(v.number()),
+    estimatedCostUsd: v.optional(v.number()),
+    hadError: v.optional(v.boolean()),
+  })
+    .index("by_metric_id", ["id"])
+    .index("by_completedAt", ["completedAt"])
+    .index("by_agentId_completedAt", ["agentId", "completedAt"])
+    .index("by_threadId_completedAt", ["threadId", "completedAt"]),
 
   settings: defineTable({
     id: v.string(),

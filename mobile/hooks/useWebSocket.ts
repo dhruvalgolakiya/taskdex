@@ -6,7 +6,7 @@ import Constants from 'expo-constants';
 import { useAgentStore } from '../stores/agentStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { startAgentActivity, updateAgentActivity, stopAgentActivity, isLiveActivitySupported } from './useLiveActivity';
-import { persistThreadRecord, persistWorkspaceRecord } from '../lib/convexClient';
+import { persistThreadRecord, persistTurnMetricRecord, persistWorkspaceRecord } from '../lib/convexClient';
 import type { BridgeRequest, BridgeResponse, Agent } from '../types';
 
 let requestCounter = 0;
@@ -18,6 +18,12 @@ let globalWs: WebSocket | null = null;
 let globalPending = new Map<string, PendingCallback>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 const queuedDispatchInFlight = new Set<string>();
+const activeTurnsByAgent = new Map<string, {
+  turnId?: string;
+  startedAt: number;
+  model: string;
+  hadError: boolean;
+}>();
 
 type StreamLogEntry = {
   seq: number;
@@ -302,6 +308,74 @@ function compactLabel(text: string, max = 44): string {
   return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
 }
 
+function parseNumberToken(value: unknown): number | undefined {
+  if (typeof value !== 'number' || Number.isNaN(value)) return undefined;
+  return value;
+}
+
+function extractTokenUsage(data: Record<string, any>): {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+} {
+  const candidates = [
+    data,
+    data?.usage,
+    data?.turn,
+    data?.turn?.usage,
+    data?.result,
+    data?.result?.usage,
+    data?.response,
+    data?.response?.usage,
+    data?.metrics,
+    data?.metrics?.usage,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const c = candidate as Record<string, unknown>;
+    const inputTokens = parseNumberToken(c.inputTokens) ?? parseNumberToken(c.prompt_tokens) ?? parseNumberToken(c.promptTokens);
+    const outputTokens = parseNumberToken(c.outputTokens) ?? parseNumberToken(c.completion_tokens) ?? parseNumberToken(c.completionTokens);
+    const totalTokens = parseNumberToken(c.totalTokens) ?? parseNumberToken(c.total_tokens);
+    if (
+      inputTokens !== undefined
+      || outputTokens !== undefined
+      || totalTokens !== undefined
+    ) {
+      const resolvedTotal = totalTokens ?? ((inputTokens || 0) + (outputTokens || 0) || undefined);
+      return {
+        inputTokens,
+        outputTokens,
+        totalTokens: resolvedTotal,
+      };
+    }
+  }
+
+  return {};
+}
+
+function extractTurnId(data: Record<string, any>): string | undefined {
+  const candidates = [
+    data?.turnId,
+    data?.turn?.id,
+    data?.id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
+function resolveModelForAgent(agentId: string): string {
+  const agent = useAgentStore.getState().agents.find((entry) => entry.id === agentId);
+  return agent?.model || 'unknown';
+}
+
+function buildTurnMetricId(agentId: string, startedAt: number, completedAt: number, turnId?: string): string {
+  const turnPart = turnId || `${startedAt}`;
+  return `turn:${agentId}:${turnPart}:${completedAt}`;
+}
+
 function getActivityLabelFromItem(item: Record<string, any> | undefined): string {
   const itemType = String(item?.type || '');
   const normalized = itemType.toLowerCase();
@@ -369,17 +443,76 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
 
   switch (event) {
     case 'turn/started': {
+      const turnId = extractTurnId(d);
+      activeTurnsByAgent.set(agentId, {
+        turnId,
+        startedAt: Date.now(),
+        model: resolveModelForAgent(agentId),
+        hadError: false,
+      });
       store.updateAgentStatus(agentId, 'working');
       store.updateAgentActivity(agentId, 'Thinking');
       const agentForLA = store.agents.find((a) => a.id === agentId);
       void startAgentActivity(agentId, agentForLA?.name || 'Agent', 'Thinking');
       break;
     }
-    case 'turn/completed':
+    case 'turn/completed': {
+      const completedAt = Date.now();
+      const turn = activeTurnsByAgent.get(agentId);
+      const turnId = extractTurnId(d) || turn?.turnId;
+      const model = turn?.model || resolveModelForAgent(agentId);
+      const startedAt = turn?.startedAt || completedAt;
+      const responseTimeMs = Math.max(0, completedAt - startedAt);
+      const usage = extractTokenUsage(d);
+      const hadError = !!d?.error || !!turn?.hadError;
+
+      void persistTurnMetricRecord({
+        id: buildTurnMetricId(agentId, startedAt, completedAt, turnId),
+        threadId: agentId,
+        agentId,
+        model,
+        startedAt,
+        completedAt,
+        responseTimeMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        hadError,
+      });
+      activeTurnsByAgent.delete(agentId);
       store.updateAgentStatus(agentId, 'ready');
       void stopAgentActivity(agentId, 'Completed');
       void flushQueuedIfReady(agentId);
       break;
+    }
+    case 'turn/failed': {
+      const completedAt = Date.now();
+      const turn = activeTurnsByAgent.get(agentId);
+      const turnId = extractTurnId(d) || turn?.turnId;
+      const model = turn?.model || resolveModelForAgent(agentId);
+      const startedAt = turn?.startedAt || completedAt;
+      const responseTimeMs = Math.max(0, completedAt - startedAt);
+      const usage = extractTokenUsage(d);
+
+      void persistTurnMetricRecord({
+        id: buildTurnMetricId(agentId, startedAt, completedAt, turnId),
+        threadId: agentId,
+        agentId,
+        model,
+        startedAt,
+        completedAt,
+        responseTimeMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        hadError: true,
+      });
+      activeTurnsByAgent.delete(agentId);
+      store.updateAgentStatus(agentId, 'error');
+      store.updateAgentActivity(agentId, 'Turn failed');
+      void stopAgentActivity(agentId, 'Failed');
+      break;
+    }
     case 'item/started': {
       const item = d?.item;
       if (!item?.id) break;
@@ -425,8 +558,17 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       break;
     }
     case 'agent/stopped':
+      activeTurnsByAgent.delete(agentId);
       store.updateAgentStatus(agentId, 'stopped');
       void stopAgentActivity(agentId, 'Stopped');
+      break;
+    default:
+      if (event.includes('error') || event.includes('failed')) {
+        const current = activeTurnsByAgent.get(agentId);
+        if (current) {
+          activeTurnsByAgent.set(agentId, { ...current, hadError: true });
+        }
+      }
       break;
   }
 }
