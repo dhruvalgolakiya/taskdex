@@ -41,7 +41,7 @@ export async function startAgentActivity(agentId: string, agentName: string, sta
         },
       },
       {
-        deepLinkUrl: `nova-chat://thread/${agentId}`,
+        deepLinkUrl: `pylon://thread/${agentId}`,
       },
     );
     if (activityId) {

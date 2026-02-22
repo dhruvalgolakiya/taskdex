@@ -3,9 +3,12 @@ import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import * as Haptics from 'expo-haptics';
 import { useAgentStore } from '../stores/agentStore';
+import { useWorkspaceStore } from '../stores/workspaceStore';
 import { startAgentActivity, updateAgentActivity, stopAgentActivity, isLiveActivitySupported } from './useLiveActivity';
-import type { BridgeRequest, BridgeResponse, Agent } from '../types';
+import { persistThreadRecord, persistTurnMetricRecord, persistWorkspaceRecord } from '../lib/convexClient';
+import type { BridgeRequest, BridgeResponse, Agent, MessageType } from '../types';
 
 let requestCounter = 0;
 const STREAM_LOG_LIMIT = 160;
@@ -15,7 +18,16 @@ type PendingCallback = (response: BridgeResponse) => void;
 let globalWs: WebSocket | null = null;
 let globalPending = new Map<string, PendingCallback>();
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempt = 0;
 const queuedDispatchInFlight = new Set<string>();
+const pendingDeltaBuffer = new Map<string, { agentId: string; itemId: string; delta: string; msgType: MessageType }>();
+let pendingDeltaFlushTimer: ReturnType<typeof setTimeout> | null = null;
+const activeTurnsByAgent = new Map<string, {
+  turnId?: string;
+  startedAt: number;
+  model: string;
+  hadError: boolean;
+}>();
 
 type StreamLogEntry = {
   seq: number;
@@ -65,6 +77,11 @@ function cleanup() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  if (pendingDeltaFlushTimer) {
+    clearTimeout(pendingDeltaFlushTimer);
+    pendingDeltaFlushTimer = null;
+  }
+  pendingDeltaBuffer.clear();
   if (globalWs) {
     globalWs.onclose = null;
     globalWs.onerror = null;
@@ -72,6 +89,42 @@ function cleanup() {
     globalWs.onmessage = null;
     globalWs.close();
     globalWs = null;
+  }
+}
+
+function getReconnectDelayMs(): number {
+  const base = Math.min(1000 * (2 ** reconnectAttempt), 30000);
+  reconnectAttempt += 1;
+  const jitter = Math.floor(Math.random() * 300);
+  return base + jitter;
+}
+
+function flushPendingDeltas() {
+  if (pendingDeltaFlushTimer) {
+    clearTimeout(pendingDeltaFlushTimer);
+    pendingDeltaFlushTimer = null;
+  }
+  if (pendingDeltaBuffer.size === 0) return;
+  const store = useAgentStore.getState();
+  for (const entry of pendingDeltaBuffer.values()) {
+    store.appendDelta(entry.agentId, entry.itemId, entry.delta, entry.msgType);
+  }
+  pendingDeltaBuffer.clear();
+}
+
+function queueDelta(agentId: string, itemId: string, delta: string, msgType: MessageType) {
+  const key = `${agentId}:${itemId}`;
+  const existing = pendingDeltaBuffer.get(key);
+  if (existing) {
+    existing.delta += delta;
+    existing.msgType = msgType;
+  } else {
+    pendingDeltaBuffer.set(key, { agentId, itemId, delta, msgType });
+  }
+  if (!pendingDeltaFlushTimer) {
+    pendingDeltaFlushTimer = setTimeout(() => {
+      flushPendingDeltas();
+    }, 60);
   }
 }
 
@@ -85,11 +138,24 @@ function connectWs(url: string) {
 
   ws.onopen = () => {
     if (globalWs !== ws) return;
-    useAgentStore.getState().setConnectionStatus('connected');
-    // Sync agents from bridge on connect
-    syncAgents();
-    // Register push token for background notifications
-    registerPushToken();
+    reconnectAttempt = 0;
+    const { bridgeApiKey, clientId } = useAgentStore.getState();
+    const requestId = `req_${++requestCounter}`;
+    globalPending.set(requestId, (res) => {
+      if (res.type === 'response') {
+        useAgentStore.getState().setConnectionStatus('connected');
+        syncAgents();
+        registerPushToken();
+        return;
+      }
+      useAgentStore.getState().setConnectionStatus('disconnected');
+      ws.close();
+    });
+    ws.send(JSON.stringify({
+      action: 'auth',
+      params: { key: bridgeApiKey, clientId },
+      requestId,
+    }));
   };
 
   ws.onmessage = (event) => {
@@ -120,7 +186,8 @@ function connectWs(url: string) {
     if (globalWs !== ws) return;
     globalWs = null;
     useAgentStore.getState().setConnectionStatus('disconnected');
-    reconnectTimer = setTimeout(() => connectWs(url), 3000);
+    const delay = getReconnectDelayMs();
+    reconnectTimer = setTimeout(() => connectWs(url), delay);
   };
 
   ws.onerror = () => {
@@ -156,10 +223,95 @@ function syncAgents() {
   const requestId = `req_${++requestCounter}`;
   globalPending.set(requestId, (res) => {
     if (res.type === 'response' && Array.isArray(res.data)) {
-      useAgentStore.getState().mergeWithBridgeAgents(res.data as Agent[]);
+      const bridgeAgents = res.data as Agent[];
+      useAgentStore.getState().mergeWithBridgeAgents(bridgeAgents);
+      void reconcileConvexWithBridgeAgents(bridgeAgents);
+      for (const agent of bridgeAgents) {
+        void flushQueuedIfReady(agent.id);
+      }
     }
   });
   globalWs.send(JSON.stringify({ action: 'list_agents', requestId }));
+}
+
+async function reconcileConvexWithBridgeAgents(bridgeAgents: Agent[]) {
+  if (!bridgeAgents.length) return;
+
+  const workspaceStore = useWorkspaceStore.getState();
+  const { bridgeUrl } = useAgentStore.getState();
+
+  for (const agent of bridgeAgents) {
+    const currentWorkspaces = workspaceStore.workspaces;
+    let workspace = currentWorkspaces.find((entry) =>
+      entry.threads.some((thread) => thread.id === agent.id));
+
+    if (!workspace) {
+      workspace = currentWorkspaces.find((entry) =>
+        entry.name === agent.name && entry.cwd === agent.cwd);
+    }
+
+    if (!workspace) {
+      const createdAt = Date.now();
+      const workspaceId = workspaceStore.createWorkspace({
+        name: agent.name,
+        model: agent.model,
+        cwd: agent.cwd,
+        approvalPolicy: agent.approvalPolicy || 'never',
+        systemPrompt: agent.systemPrompt || '',
+        firstThreadAgentId: agent.id,
+        firstThreadTitle: 'Thread 1',
+        makeActive: false,
+      });
+      await persistWorkspaceRecord({
+        id: workspaceId,
+        bridgeUrl,
+        name: agent.name,
+        model: agent.model,
+        cwd: agent.cwd,
+        approvalPolicy: agent.approvalPolicy || 'never',
+        systemPrompt: agent.systemPrompt || '',
+        createdAt,
+      });
+      await persistThreadRecord({
+        id: agent.id,
+        workspaceId,
+        title: 'Thread 1',
+        bridgeAgentId: agent.id,
+        createdAt,
+      });
+      continue;
+    }
+
+    if (!workspace.threads.some((thread) => thread.id === agent.id)) {
+      const title = `Thread ${workspace.threads.length + 1}`;
+      workspaceStore.addThreadToWorkspace({
+        workspaceId: workspace.id,
+        threadAgentId: agent.id,
+        title,
+        makeActive: false,
+      });
+      await persistThreadRecord({
+        id: agent.id,
+        workspaceId: workspace.id,
+        title,
+        bridgeAgentId: agent.id,
+        createdAt: Date.now(),
+      });
+    }
+
+    await persistWorkspaceRecord({
+      id: workspace.id,
+      bridgeUrl,
+      name: workspace.name,
+      model: workspace.model,
+      cwd: workspace.cwd,
+      approvalPolicy: workspace.approvalPolicy,
+      systemPrompt: workspace.systemPrompt,
+      templateId: workspace.templateId,
+      templateIcon: workspace.templateIcon,
+      createdAt: workspace.createdAt,
+    });
+  }
 }
 
 export function sendRequest(action: string, params?: Record<string, unknown>): Promise<BridgeResponse> {
@@ -204,6 +356,74 @@ function compactLabel(text: string, max = 44): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
   return normalized.length > max ? `${normalized.slice(0, max - 3)}...` : normalized;
+}
+
+function parseNumberToken(value: unknown): number | undefined {
+  if (typeof value !== 'number' || Number.isNaN(value)) return undefined;
+  return value;
+}
+
+function extractTokenUsage(data: Record<string, any>): {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+} {
+  const candidates = [
+    data,
+    data?.usage,
+    data?.turn,
+    data?.turn?.usage,
+    data?.result,
+    data?.result?.usage,
+    data?.response,
+    data?.response?.usage,
+    data?.metrics,
+    data?.metrics?.usage,
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const c = candidate as Record<string, unknown>;
+    const inputTokens = parseNumberToken(c.inputTokens) ?? parseNumberToken(c.prompt_tokens) ?? parseNumberToken(c.promptTokens);
+    const outputTokens = parseNumberToken(c.outputTokens) ?? parseNumberToken(c.completion_tokens) ?? parseNumberToken(c.completionTokens);
+    const totalTokens = parseNumberToken(c.totalTokens) ?? parseNumberToken(c.total_tokens);
+    if (
+      inputTokens !== undefined
+      || outputTokens !== undefined
+      || totalTokens !== undefined
+    ) {
+      const resolvedTotal = totalTokens ?? ((inputTokens || 0) + (outputTokens || 0) || undefined);
+      return {
+        inputTokens,
+        outputTokens,
+        totalTokens: resolvedTotal,
+      };
+    }
+  }
+
+  return {};
+}
+
+function extractTurnId(data: Record<string, any>): string | undefined {
+  const candidates = [
+    data?.turnId,
+    data?.turn?.id,
+    data?.id,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
+function resolveModelForAgent(agentId: string): string {
+  const agent = useAgentStore.getState().agents.find((entry) => entry.id === agentId);
+  return agent?.model || 'unknown';
+}
+
+function buildTurnMetricId(agentId: string, startedAt: number, completedAt: number, turnId?: string): string {
+  const turnPart = turnId || `${startedAt}`;
+  return `turn:${agentId}:${turnPart}:${completedAt}`;
 }
 
 function getActivityLabelFromItem(item: Record<string, any> | undefined): string {
@@ -273,17 +493,78 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
 
   switch (event) {
     case 'turn/started': {
+      const turnId = extractTurnId(d);
+      activeTurnsByAgent.set(agentId, {
+        turnId,
+        startedAt: Date.now(),
+        model: resolveModelForAgent(agentId),
+        hadError: false,
+      });
       store.updateAgentStatus(agentId, 'working');
       store.updateAgentActivity(agentId, 'Thinking');
       const agentForLA = store.agents.find((a) => a.id === agentId);
       void startAgentActivity(agentId, agentForLA?.name || 'Agent', 'Thinking');
       break;
     }
-    case 'turn/completed':
+    case 'turn/completed': {
+      const completedAt = Date.now();
+      const turn = activeTurnsByAgent.get(agentId);
+      const turnId = extractTurnId(d) || turn?.turnId;
+      const model = turn?.model || resolveModelForAgent(agentId);
+      const startedAt = turn?.startedAt || completedAt;
+      const responseTimeMs = Math.max(0, completedAt - startedAt);
+      const usage = extractTokenUsage(d);
+      const hadError = !!d?.error || !!turn?.hadError;
+
+      void persistTurnMetricRecord({
+        id: buildTurnMetricId(agentId, startedAt, completedAt, turnId),
+        threadId: agentId,
+        agentId,
+        model,
+        startedAt,
+        completedAt,
+        responseTimeMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        hadError,
+      });
+      activeTurnsByAgent.delete(agentId);
       store.updateAgentStatus(agentId, 'ready');
       void stopAgentActivity(agentId, 'Completed');
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       void flushQueuedIfReady(agentId);
       break;
+    }
+    case 'turn/failed': {
+      const completedAt = Date.now();
+      const turn = activeTurnsByAgent.get(agentId);
+      const turnId = extractTurnId(d) || turn?.turnId;
+      const model = turn?.model || resolveModelForAgent(agentId);
+      const startedAt = turn?.startedAt || completedAt;
+      const responseTimeMs = Math.max(0, completedAt - startedAt);
+      const usage = extractTokenUsage(d);
+
+      void persistTurnMetricRecord({
+        id: buildTurnMetricId(agentId, startedAt, completedAt, turnId),
+        threadId: agentId,
+        agentId,
+        model,
+        startedAt,
+        completedAt,
+        responseTimeMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        hadError: true,
+      });
+      activeTurnsByAgent.delete(agentId);
+      store.updateAgentStatus(agentId, 'error');
+      store.updateAgentActivity(agentId, 'Turn failed');
+      void stopAgentActivity(agentId, 'Failed');
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      break;
+    }
     case 'item/started': {
       const item = d?.item;
       if (!item?.id) break;
@@ -301,24 +582,25 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       if (d?.itemId && d?.delta) {
         store.updateAgentActivity(agentId, 'Writing response');
         void updateAgentActivity(agentId, 'Writing response');
-        store.appendDelta(agentId, d.itemId, d.delta, 'agent');
+        queueDelta(agentId, d.itemId, d.delta, 'agent');
       }
       break;
     case 'item/reasoning/delta':
       if (d?.itemId && d?.delta) {
         store.updateAgentActivity(agentId, 'Thinking');
         void updateAgentActivity(agentId, 'Thinking');
-        store.appendDelta(agentId, d.itemId, d.delta, 'thinking');
+        queueDelta(agentId, d.itemId, d.delta, 'thinking');
       }
       break;
     case 'item/commandOutput/delta':
       if (d?.itemId && d?.delta) {
         store.updateAgentActivity(agentId, 'Reading command output');
         void updateAgentActivity(agentId, 'Reading command output');
-        store.appendDelta(agentId, d.itemId, d.delta, 'command_output');
+        queueDelta(agentId, d.itemId, d.delta, 'command_output');
       }
       break;
     case 'item/completed': {
+      flushPendingDeltas();
       const item = d?.item;
       if (!item?.id) break;
       const msgType = getMessageType(item.type || '');
@@ -329,8 +611,17 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       break;
     }
     case 'agent/stopped':
+      activeTurnsByAgent.delete(agentId);
       store.updateAgentStatus(agentId, 'stopped');
       void stopAgentActivity(agentId, 'Stopped');
+      break;
+    default:
+      if (event.includes('error') || event.includes('failed')) {
+        const current = activeTurnsByAgent.get(agentId);
+        if (current) {
+          activeTurnsByAgent.set(agentId, { ...current, hadError: true });
+        }
+      }
       break;
   }
 }
@@ -355,6 +646,8 @@ export async function sendMessageToAgent(agentId: string, text: string) {
         name: agent.name,
         model: agent.model,
         cwd: agent.cwd,
+        approvalPolicy: agent.approvalPolicy,
+        systemPrompt: agent.systemPrompt,
       });
       if (res.type === 'response' && res.data) {
         const newAgent = res.data as Agent;
@@ -378,11 +671,13 @@ export async function sendMessageToAgent(agentId: string, text: string) {
 
 export function useWebSocket() {
   const bridgeUrl = useAgentStore((s) => s.bridgeUrl);
+  const bridgeApiKey = useAgentStore((s) => s.bridgeApiKey);
+  const clientId = useAgentStore((s) => s.clientId);
 
   useEffect(() => {
     connectWs(bridgeUrl);
     return () => cleanup();
-  }, [bridgeUrl]);
+  }, [bridgeUrl, bridgeApiKey, clientId]);
 
   const send = useCallback(
     (action: string, params?: Record<string, unknown>): Promise<BridgeResponse> => sendRequest(action, params),
@@ -390,8 +685,19 @@ export function useWebSocket() {
   );
 
   const createAgent = useCallback(
-    async (name: string, model: string, cwd: string) => {
-      const res = await send('create_agent', { name, model, cwd });
+    async (
+      name: string,
+      model: string,
+      cwd: string,
+      config?: { approvalPolicy?: string; systemPrompt?: string },
+    ) => {
+      const res = await send('create_agent', {
+        name,
+        model,
+        cwd,
+        approvalPolicy: config?.approvalPolicy,
+        systemPrompt: config?.systemPrompt,
+      });
       if (res.type === 'response' && res.data) {
         useAgentStore.getState().addAgent(res.data as Agent);
         return res.data as Agent;
@@ -408,6 +714,11 @@ export function useWebSocket() {
       if (!trimmed) return;
 
       const agent = store.agents.find((a) => a.id === agentId);
+      if (store.connectionStatus !== 'connected') {
+        const queuedCount = store.enqueueQueuedMessage(agentId, trimmed);
+        store.updateAgentActivity(agentId, `Offline queue (${queuedCount})`);
+        return;
+      }
       if (agent?.status === 'working') {
         const queuedCount = store.enqueueQueuedMessage(agentId, trimmed);
         store.updateAgentActivity(agentId, `Queued ${queuedCount} message${queuedCount === 1 ? '' : 's'}`);
@@ -422,6 +733,8 @@ export function useWebSocket() {
             name: agent.name,
             model: agent.model,
             cwd: agent.cwd,
+            approvalPolicy: agent.approvalPolicy,
+            systemPrompt: agent.systemPrompt,
           });
           if (res.type === 'response' && res.data) {
             const newAgent = res.data as Agent;
@@ -466,6 +779,16 @@ export function useWebSocket() {
     [send],
   );
 
+  const updateAgentConfig = useCallback(
+    async (agentId: string, config: { model?: string; approvalPolicy?: string; systemPrompt?: string }) => {
+      await send('update_agent_config', { agentId, ...config });
+      if (config.model?.trim()) {
+        useAgentStore.getState().updateAgentModel(agentId, config.model.trim());
+      }
+    },
+    [send],
+  );
+
   const interruptAgent = useCallback(
     async (agentId: string) => {
       await send('interrupt', { agentId });
@@ -473,5 +796,5 @@ export function useWebSocket() {
     [send],
   );
 
-  return { send, createAgent, sendMessage, stopAgent, interruptAgent, updateAgentModel };
+  return { send, createAgent, sendMessage, stopAgent, interruptAgent, updateAgentModel, updateAgentConfig };
 }

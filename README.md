@@ -48,9 +48,11 @@ This starts the server on port **3001**. You'll see output like:
   Codex Bridge Server running
   Local:   ws://localhost:3001
   Network: ws://192.168.1.42:3001
+  API key: <generated-key>
+  [terminal QR code]
 ```
 
-Note the **Network** URL — you'll enter this in the mobile app.
+Note the **Network** URL and **API key** — or scan the terminal QR from mobile settings (`Scan QR`) to auto-fill both.
 
 ### Production
 
@@ -59,13 +61,44 @@ npm run build
 npm start
 ```
 
-### Health Check
+### Health Check (authenticated)
 
 ```
-GET http://localhost:3001/health
+GET http://localhost:3001/health?key=<api-key>
+# or
+Authorization: Bearer <api-key>
 ```
 
-Returns active agent count and registered push token count.
+Returns uptime, active agent count, connected client count, push counts, and system info.
+
+### Docker
+
+Run the bridge in Docker with a mounted code workspace:
+
+```bash
+docker compose up -d --build
+```
+
+Environment variables used by `docker-compose.yml`:
+
+- `PORT` (default `3001`)
+- `API_KEY` (required in production)
+- `CODEX_CWD` (container path to workspace, default `/workspace`)
+- `HOST_CODE_DIR` (host path mounted into `CODEX_CWD`)
+- `REPOS_DIR` (path where remote-managed repos are cloned)
+- `AUTO_PULL_REPOS` (`true`/`false`, optional: pull before `create_agent` when cwd is under `REPOS_DIR`)
+- `OPENAI_API_KEY` (required for Codex CLI)
+
+### VPS Deployment (Hetzner + Caddy)
+
+Use the full step-by-step guide in `docs/vps-hetzner.md`:
+
+- Hetzner server provisioning
+- Docker installation and bridge deployment
+- SSH deploy key setup for private repo cloning
+- Caddy reverse proxy for `wss://...`
+- systemd/PM2 service persistence
+- Optional auto-pull before agent start
 
 ### API
 
@@ -73,14 +106,30 @@ The bridge accepts JSON messages over WebSocket:
 
 | Action | Params | Description |
 |---|---|---|
-| `create_agent` | `{ name, model, cwd }` | Spawn a new Codex agent |
+| `create_agent` | `{ name, model, cwd, approvalPolicy?, systemPrompt? }` | Spawn a new Codex agent |
 | `list_agents` | — | List all running agents |
 | `send_message` | `{ agentId, text }` | Send a message to an agent |
 | `interrupt` | `{ agentId }` | Interrupt an agent's current turn |
 | `stop_agent` | `{ agentId }` | Stop and kill an agent process |
 | `update_agent_model` | `{ agentId, model }` | Change an agent's model |
+| `update_agent_config` | `{ agentId, model?, approvalPolicy?, systemPrompt? }` | Update agent runtime config |
 | `get_agent` | `{ agentId }` | Get details for a specific agent |
 | `register_push_token` | `{ token }` | Register an Expo push token for notifications |
+| `update_notification_prefs` | `{ agentId, level }` | Set per-agent notifications (`all`, `errors`, `muted`) |
+| `get_notification_prefs` | — | Get current per-agent notification preferences |
+| `list_notification_history` | `{ limit? }` | List recent bridge notification send history |
+| `list_files` | `{ cwd, path }` | List files/directories in workspace |
+| `list_directories` | `{ cwd, path }` | List only directories for cwd browsing |
+| `read_file` | `{ cwd, path }` | Read file contents |
+| `git_status` | `{ cwd }` | Get git branch/dirty state |
+| `git_log` | `{ cwd, limit? }` | Get commit history |
+| `git_diff` | `{ cwd, file? }` | Get current diff |
+| `git_commit` | `{ cwd, message }` | Commit all current changes |
+| `git_branches` | `{ cwd }` | List local branches |
+| `git_checkout` | `{ cwd, branch }` | Switch to local branch |
+| `clone_repo` | `{ url }` | Clone repository to bridge `REPOS_DIR` |
+| `list_repos` | — | List cloned repositories with paths/remotes |
+| `pull_repo` | `{ path }` | Pull latest changes for a cloned repo |
 
 The bridge streams events back to the mobile app (e.g. `turn/started`, `item/agentMessage/delta`, `turn/completed`).
 
@@ -124,6 +173,7 @@ npx expo run:android
 - **Interactive replies** — Reply to agents directly from notification (hold/long-press the notification)
 - **Action buttons** — Stop Agent and Open Thread buttons on notifications
 - **Live Activity (iOS)** — Real-time agent status in Dynamic Island and lock screen
+- **QR connect** — Scan bridge terminal QR to auto-fill URL + API key
 - **Dark mode** — Light and dark theme support
 
 ## Remote Access with Tailscale

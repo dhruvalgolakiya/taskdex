@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { AgentWorkspace } from '../types';
+import { fetchWorkspaceGraph } from '../lib/convexClient';
 
 const WORKSPACES_KEY = 'codex_workspaces_v1';
 
@@ -19,8 +20,13 @@ interface WorkspaceStore {
     name: string;
     model: string;
     cwd: string;
+    approvalPolicy?: string;
+    systemPrompt?: string;
+    templateId?: string;
+    templateIcon?: string;
     firstThreadAgentId: string;
     firstThreadTitle?: string;
+    makeActive?: boolean;
   }) => string;
   addThreadToWorkspace: (params: {
     workspaceId: string;
@@ -30,10 +36,16 @@ interface WorkspaceStore {
   }) => void;
   setActiveThread: (workspaceId: string, threadAgentId: string) => void;
   updateWorkspaceModel: (workspaceId: string, model: string) => void;
+  updateWorkspaceConfig: (
+    workspaceId: string,
+    config: Partial<Pick<AgentWorkspace, 'model' | 'cwd' | 'approvalPolicy' | 'systemPrompt' | 'templateId' | 'templateIcon'>>,
+  ) => void;
+  setWorkspacesFromConvex: (workspaces: AgentWorkspace[]) => void;
   ensureWorkspacesFromAgents: (
-    agents: { id: string; name: string; model: string; cwd: string }[],
+    agents: { id: string; name: string; model: string; cwd: string; approvalPolicy?: string; systemPrompt?: string }[],
   ) => void;
   removeThreadFromWorkspace: (workspaceId: string, threadAgentId: string) => void;
+  replaceThreadAgentId: (workspaceId: string, oldThreadAgentId: string, newThreadAgentId: string) => void;
   cleanupMissingAgentThreads: (agentIds: string[]) => void;
 }
 
@@ -50,6 +62,14 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   loaded: false,
 
   loadSavedWorkspaces: async () => {
+    const convexWorkspaces = await fetchWorkspaceGraph();
+    if (convexWorkspaces !== null) {
+      const activeWorkspaceId = convexWorkspaces[0]?.id || null;
+      set({ workspaces: convexWorkspaces, activeWorkspaceId, loaded: true });
+      persist(convexWorkspaces, activeWorkspaceId);
+      return;
+    }
+
     try {
       const raw = await AsyncStorage.getItem(WORKSPACES_KEY);
       if (!raw) {
@@ -75,7 +95,18 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     persist(workspaces, workspaceId);
   },
 
-  createWorkspace: ({ name, model, cwd, firstThreadAgentId, firstThreadTitle }) => {
+  createWorkspace: ({
+    name,
+    model,
+    cwd,
+    approvalPolicy,
+    systemPrompt,
+    templateId,
+    templateIcon,
+    firstThreadAgentId,
+    firstThreadTitle,
+    makeActive = true,
+  }) => {
     const threadTitle = firstThreadTitle?.trim() || 'Thread 1';
     const now = Date.now();
     const workspace: AgentWorkspace = {
@@ -83,6 +114,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       name: name.trim() || 'Agent',
       model: model.trim() || 'gpt-5.1-codex',
       cwd: cwd.trim() || '.',
+      approvalPolicy: approvalPolicy || 'never',
+      systemPrompt: systemPrompt || '',
+      templateId,
+      templateIcon,
       threads: [{ id: firstThreadAgentId, title: threadTitle, createdAt: now }],
       activeThreadId: firstThreadAgentId,
       createdAt: now,
@@ -90,8 +125,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     };
 
     const workspaces = [...get().workspaces, workspace];
-    set({ workspaces, activeWorkspaceId: workspace.id });
-    persist(workspaces, workspace.id);
+    const nextActiveWorkspaceId = makeActive ? workspace.id : (get().activeWorkspaceId || workspace.id);
+    set({ workspaces, activeWorkspaceId: nextActiveWorkspaceId });
+    persist(workspaces, nextActiveWorkspaceId);
     return workspace.id;
   },
 
@@ -138,6 +174,31 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     persist(workspaces, get().activeWorkspaceId);
   },
 
+  updateWorkspaceConfig: (workspaceId, config) => {
+    const workspaces = get().workspaces.map((workspace) =>
+      workspace.id === workspaceId
+        ? {
+          ...workspace,
+          ...config,
+          model: config.model?.trim() || workspace.model,
+          cwd: config.cwd?.trim() || workspace.cwd,
+          updatedAt: Date.now(),
+        }
+        : workspace,
+    );
+    set({ workspaces });
+    persist(workspaces, get().activeWorkspaceId);
+  },
+
+  setWorkspacesFromConvex: (workspaces) => {
+    const prevActiveWorkspaceId = get().activeWorkspaceId;
+    const activeWorkspaceId = prevActiveWorkspaceId && workspaces.some((workspace) => workspace.id === prevActiveWorkspaceId)
+      ? prevActiveWorkspaceId
+      : (workspaces[0]?.id || null);
+    set({ workspaces, activeWorkspaceId });
+    persist(workspaces, activeWorkspaceId);
+  },
+
   ensureWorkspacesFromAgents: (agents) => {
     if (!agents.length) return;
     const current = get().workspaces;
@@ -149,6 +210,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       name: agent.name,
       model: agent.model,
       cwd: agent.cwd,
+      approvalPolicy: agent.approvalPolicy || 'never',
+      systemPrompt: agent.systemPrompt || '',
       threads: [{ id: agent.id, title: 'Thread 1', createdAt: now }],
       activeThreadId: agent.id,
       createdAt: now,
@@ -182,6 +245,21 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     set({ workspaces, activeWorkspaceId });
     persist(workspaces, activeWorkspaceId);
+  },
+
+  replaceThreadAgentId: (workspaceId, oldThreadAgentId, newThreadAgentId) => {
+    const workspaces = get().workspaces.map((workspace) => {
+      if (workspace.id !== workspaceId) return workspace;
+      const threads = workspace.threads.map((thread) =>
+        thread.id === oldThreadAgentId ? { ...thread, id: newThreadAgentId } : thread,
+      );
+      const activeThreadId = workspace.activeThreadId === oldThreadAgentId
+        ? newThreadAgentId
+        : workspace.activeThreadId;
+      return { ...workspace, threads, activeThreadId, updatedAt: Date.now() };
+    });
+    set({ workspaces });
+    persist(workspaces, get().activeWorkspaceId);
   },
 
   cleanupMissingAgentThreads: (agentIds) => {

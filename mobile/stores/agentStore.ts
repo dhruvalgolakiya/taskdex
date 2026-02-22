@@ -1,19 +1,25 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Agent, AgentMessage, AgentStatus, MessageType, QueuedMessage } from '../types';
+import { fetchBridgeSetting, persistBridgeSetting, persistMessage } from '../lib/convexClient';
 
 const BRIDGE_URL_KEY = 'codex_bridge_url';
+const BRIDGE_API_KEY_KEY = 'codex_bridge_api_key';
+const CLIENT_ID_KEY = 'codex_client_id';
 const AGENTS_KEY = 'codex_agents';
 
 interface AgentStore {
   agents: Agent[];
   connectionStatus: 'connecting' | 'connected' | 'disconnected';
   bridgeUrl: string;
+  bridgeApiKey: string;
+  clientId: string;
   urlLoaded: boolean;
   agentsLoaded: boolean;
 
   setConnectionStatus: (status: AgentStore['connectionStatus']) => void;
   setBridgeUrl: (url: string) => void;
+  setBridgeApiKey: (apiKey: string) => void;
   loadBridgeUrl: () => Promise<void>;
   loadSavedAgents: () => Promise<void>;
   setAgents: (agents: Agent[]) => void;
@@ -31,13 +37,17 @@ interface AgentStore {
   removeQueuedMessage: (agentId: string, queueId: string) => void;
   moveQueuedMessage: (agentId: string, queueId: string, direction: -1 | 1) => void;
   clearQueuedMessages: (agentId: string) => void;
+  setAgentMessages: (agentId: string, messages: AgentMessage[]) => void;
+  prependAgentMessages: (agentId: string, messages: AgentMessage[]) => void;
+  clearAgentMessages: (agentId: string) => void;
+  removeMessage: (agentId: string, message: AgentMessage) => void;
   appendMessage: (agentId: string, message: AgentMessage) => void;
   appendDelta: (agentId: string, itemId: string, delta: string, msgType: MessageType) => void;
   finalizeItem: (agentId: string, itemId: string, text: string, msgType: MessageType) => void;
 }
 
 function saveAgents(agents: Agent[]) {
-  const persisted = agents.map(({ activityLabel: _activityLabel, ...agent }) => agent);
+  const persisted = agents.map(({ activityLabel: _activityLabel, messages: _messages, ...agent }) => agent);
   AsyncStorage.setItem(AGENTS_KEY, JSON.stringify(persisted)).catch(() => {});
 }
 
@@ -47,6 +57,10 @@ function createQueuedMessage(text: string): QueuedMessage {
     text,
     createdAt: Date.now(),
   };
+}
+
+function createClientId(): string {
+  return `client_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function normalizeQueuedMessages(input: unknown): QueuedMessage[] {
@@ -101,6 +115,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   agents: [],
   connectionStatus: 'disconnected',
   bridgeUrl: 'ws://localhost:3001',
+  bridgeApiKey: '',
+  clientId: '',
   urlLoaded: false,
   agentsLoaded: false,
 
@@ -108,29 +124,44 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   setBridgeUrl: (url) => {
     AsyncStorage.setItem(BRIDGE_URL_KEY, url);
+    void persistBridgeSetting({ bridgeUrl: url, apiKey: get().bridgeApiKey });
     set({ bridgeUrl: url });
   },
 
+  setBridgeApiKey: (apiKey) => {
+    AsyncStorage.setItem(BRIDGE_API_KEY_KEY, apiKey);
+    void persistBridgeSetting({ bridgeUrl: get().bridgeUrl, apiKey });
+    set({ bridgeApiKey: apiKey });
+  },
+
   loadBridgeUrl: async () => {
+    const convexSettings = await fetchBridgeSetting();
     const saved = await AsyncStorage.getItem(BRIDGE_URL_KEY);
-    if (saved) {
-      set({ bridgeUrl: saved, urlLoaded: true });
-    } else {
-      set({ urlLoaded: true });
-    }
+    const savedApiKey = await AsyncStorage.getItem(BRIDGE_API_KEY_KEY);
+    const savedClientId = await AsyncStorage.getItem(CLIENT_ID_KEY);
+
+    const bridgeUrl = convexSettings?.bridgeUrl || saved || 'ws://localhost:3001';
+    const bridgeApiKey = convexSettings?.apiKey || savedApiKey || '';
+    const clientId = savedClientId || createClientId();
+
+    set({ bridgeUrl, bridgeApiKey, clientId, urlLoaded: true });
+    AsyncStorage.setItem(BRIDGE_URL_KEY, bridgeUrl).catch(() => {});
+    AsyncStorage.setItem(BRIDGE_API_KEY_KEY, bridgeApiKey).catch(() => {});
+    AsyncStorage.setItem(CLIENT_ID_KEY, clientId).catch(() => {});
   },
 
   loadSavedAgents: async () => {
     try {
       const saved = await AsyncStorage.getItem(AGENTS_KEY);
       if (saved) {
-        const parsed = JSON.parse(saved) as Agent[];
+        const parsed = JSON.parse(saved) as Array<Partial<Agent>>;
         // Mark all loaded agents as stopped initially (bridge will update live ones)
         const agents = dedupeAgents(parsed.map((a) => ({
           ...a,
+          messages: Array.isArray(a.messages) ? a.messages : [],
           status: 'stopped' as AgentStatus,
           queuedMessages: normalizeQueuedMessages(a.queuedMessages),
-        })));
+        })) as Agent[]);
         set({ agents, agentsLoaded: true });
       } else {
         set({ agentsLoaded: true });
@@ -350,12 +381,51 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     saveAgents(agents);
   },
 
+  setAgentMessages: (agentId, messages) => {
+    const agents = get().agents.map((a) =>
+      a.id === agentId ? { ...a, messages } : a,
+    );
+    set({ agents });
+    saveAgents(agents);
+  },
+
+  prependAgentMessages: (agentId, messages) => {
+    if (!messages.length) return;
+    const agents = get().agents.map((a) =>
+      a.id === agentId ? { ...a, messages: [...messages, ...a.messages] } : a,
+    );
+    set({ agents });
+    saveAgents(agents);
+  },
+
+  clearAgentMessages: (agentId) => {
+    const agents = get().agents.map((a) =>
+      a.id === agentId ? { ...a, messages: [] } : a,
+    );
+    set({ agents });
+    saveAgents(agents);
+  },
+
+  removeMessage: (agentId, message) => {
+    const agents = get().agents.map((a) => {
+      if (a.id !== agentId) return a;
+      const messages = a.messages.filter((entry) => {
+        if (message._itemId) return entry._itemId !== message._itemId;
+        return !(entry.timestamp === message.timestamp && entry.role === message.role && entry.text === message.text);
+      });
+      return { ...a, messages };
+    });
+    set({ agents });
+    saveAgents(agents);
+  },
+
   appendMessage: (agentId, message) => {
     const agents = get().agents.map((a) =>
       a.id === agentId ? { ...a, messages: [...a.messages, message] } : a,
     );
     set({ agents });
     saveAgents(agents);
+    void persistMessage(agentId, message);
   },
 
   appendDelta: (agentId, itemId, delta, msgType) => {
@@ -396,6 +466,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   finalizeItem: (agentId, itemId, text, msgType) => {
+    let finalizedMessage: AgentMessage | null = null;
     const agents = get().agents.map((a) => {
       if (a.id !== agentId) return a;
       const messages = [...a.messages];
@@ -412,23 +483,29 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
           type: msgType,
           streaming: false,
         };
+        finalizedMessage = messages[keepIdx];
         // Guard against legacy duplicate fragments for the same item.
         for (let i = matchingIndexes.length - 1; i >= 1; i -= 1) {
           messages.splice(matchingIndexes[i], 1);
         }
       } else if (text) {
-        messages.push({
+        const nextMessage: AgentMessage = {
           role: 'agent',
           type: msgType,
           text,
           timestamp: Date.now(),
           _itemId: itemId,
           streaming: false,
-        });
+        };
+        messages.push(nextMessage);
+        finalizedMessage = nextMessage;
       }
       return { ...a, messages };
     });
     set({ agents });
     saveAgents(agents);
+    if (finalizedMessage) {
+      void persistMessage(agentId, finalizedMessage);
+    }
   },
 }));
