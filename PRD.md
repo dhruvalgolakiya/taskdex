@@ -290,10 +290,10 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 10.1 Onboarding
 
-- [ ] First-launch: 2-3 screen walkthrough
-- [ ] "Start bridge" screen with copy-pasteable command
-- [ ] Bridge URL entry with connection test
-- [ ] Guided first agent creation
+- [x] First-launch: 2-3 screen walkthrough
+- [x] "Start bridge" screen with copy-pasteable command
+- [x] Bridge URL entry with connection test
+- [x] Guided first agent creation
 
 ### 10.2 QR Code Connect
 

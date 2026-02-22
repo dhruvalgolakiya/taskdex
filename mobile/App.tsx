@@ -24,6 +24,7 @@ import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
 import { ConvexProvider, useQuery } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   Manrope_400Regular,
   Manrope_500Medium,
@@ -93,6 +94,9 @@ Notifications.setNotificationHandler({
     };
   },
 });
+
+const ONBOARDING_DONE_KEY = 'pylon_onboarding_done_v1';
+const BRIDGE_START_COMMAND = 'cd /path/to/codex-mobile/bridge-server && npm install && npm run dev';
 
 function getConnectionLabel(status: string) {
   if (status === 'connected') return 'Connected to bridge';
@@ -245,6 +249,8 @@ function WorkspaceScreen({
 
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showCreateThread, setShowCreateThread] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showEditModel, setShowEditModel] = useState(false);
@@ -410,6 +416,22 @@ function WorkspaceScreen({
   useEffect(() => {
     setApiKeyInput(bridgeApiKey);
   }, [bridgeApiKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(ONBOARDING_DONE_KEY)
+      .then((value) => {
+        if (cancelled) return;
+        if (value !== 'done') {
+          setShowOnboarding(true);
+          setOnboardingStep(0);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!liveWorkspaceGraph) return;
@@ -1070,6 +1092,15 @@ function WorkspaceScreen({
     setTimeout(() => setSaved(false), 1500);
     void handleCheckBridgeHealth();
   };
+
+  const completeOnboarding = useCallback((openCreateAgent: boolean) => {
+    AsyncStorage.setItem(ONBOARDING_DONE_KEY, 'done').catch(() => {});
+    setShowOnboarding(false);
+    setOnboardingStep(0);
+    if (openCreateAgent) {
+      setShowCreateWorkspace(true);
+    }
+  }, []);
 
   const handleSendTestNotification = async () => {
     if (sendingTestNotification) return;
@@ -2018,6 +2049,120 @@ function WorkspaceScreen({
           <Pressable style={s.sidebarScrim} onPress={() => setShowSidebar(false)} />
         </View>
       )}
+
+      <Modal visible={showOnboarding} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Welcome to Pylon</Text>
+            <View style={s.onboardingDots}>
+              {[0, 1, 2].map((step) => (
+                <View key={step} style={[s.onboardingDot, onboardingStep === step && s.onboardingDotActive]} />
+              ))}
+            </View>
+
+            {onboardingStep === 0 && (
+              <View style={s.onboardingStepWrap}>
+                <Text style={s.onboardingStepTitle}>Control Codex agents from your phone</Text>
+                <Text style={s.onboardingStepBody}>
+                  Pylon has two parts: this mobile app and a bridge server running where your code lives.
+                </Text>
+                <Text style={s.onboardingStepBody}>
+                  This walkthrough will help you start the bridge, verify connection, and create your first agent.
+                </Text>
+              </View>
+            )}
+
+            {onboardingStep === 1 && (
+              <View style={s.onboardingStepWrap}>
+                <Text style={s.onboardingStepTitle}>Start the Bridge</Text>
+                <Text style={s.onboardingStepBody}>
+                  Run this command on your computer terminal:
+                </Text>
+                <View style={s.onboardingCommandBox}>
+                  <Text style={s.onboardingCommandText}>{BRIDGE_START_COMMAND}</Text>
+                </View>
+                <Pressable
+                  style={s.cancelBtn}
+                  onPress={() => {
+                    void Clipboard.setStringAsync(BRIDGE_START_COMMAND);
+                  }}
+                >
+                  <Text style={s.cancelText}>Copy Command</Text>
+                </Pressable>
+              </View>
+            )}
+
+            {onboardingStep === 2 && (
+              <View style={s.onboardingStepWrap}>
+                <Text style={s.onboardingStepTitle}>Connect and Create Your First Agent</Text>
+                <Text style={s.label}>Bridge WebSocket URL</Text>
+                <TextInput
+                  style={s.input}
+                  value={urlInput}
+                  onChangeText={setUrlInput}
+                  placeholder="ws://192.168.1.x:3001"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  keyboardType="url"
+                />
+                <Text style={s.label}>Bridge API Key</Text>
+                <TextInput
+                  style={s.input}
+                  value={apiKeyInput}
+                  onChangeText={setApiKeyInput}
+                  placeholder="Paste bridge API key"
+                  placeholderTextColor={colors.textMuted}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry={true}
+                />
+                <Text style={s.themeHint}>{bridgeHealth}</Text>
+                <Pressable
+                  style={[s.cancelBtn, checkingHealth && s.smallActionBtnDisabled]}
+                  onPress={() => void handleCheckBridgeHealth()}
+                  disabled={checkingHealth}
+                >
+                  <Text style={s.cancelText}>{checkingHealth ? 'Checking...' : 'Test Connection'}</Text>
+                </Pressable>
+              </View>
+            )}
+
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => completeOnboarding(false)}>
+                <Text style={s.cancelText}>Skip</Text>
+              </Pressable>
+              {onboardingStep > 0 && (
+                <Pressable
+                  style={s.cancelBtn}
+                  onPress={() => setOnboardingStep((step) => Math.max(0, step - 1))}
+                >
+                  <Text style={s.cancelText}>Back</Text>
+                </Pressable>
+              )}
+              {onboardingStep < 2 ? (
+                <Pressable
+                  style={s.primaryBtn}
+                  onPress={() => setOnboardingStep((step) => Math.min(2, step + 1))}
+                >
+                  <Text style={s.primaryText}>Next</Text>
+                </Pressable>
+              ) : (
+                <Pressable
+                  style={[s.primaryBtn, (!urlInput.trim() || !apiKeyInput.trim()) && s.smallActionBtnDisabled]}
+                  disabled={!urlInput.trim() || !apiKeyInput.trim()}
+                  onPress={() => {
+                    handleSaveBridgeUrl();
+                    completeOnboarding(true);
+                  }}
+                >
+                  <Text style={s.primaryText}>Save & Start</Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       <Modal visible={showCreateWorkspace} transparent={true} animationType="fade">
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -3654,6 +3799,49 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   notificationHistoryMeta: {
     color: colors.textMuted,
     fontSize: 10,
+    fontFamily: typography.mono,
+  },
+  onboardingDots: {
+    flexDirection: 'row',
+    gap: 6,
+    marginBottom: 10,
+  },
+  onboardingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: colors.border,
+  },
+  onboardingDotActive: {
+    backgroundColor: colors.accent,
+  },
+  onboardingStepWrap: {
+    marginBottom: 10,
+    gap: 8,
+  },
+  onboardingStepTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    fontFamily: typography.semibold,
+  },
+  onboardingStepBody: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 19,
+    fontFamily: typography.regular,
+  },
+  onboardingCommandBox: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    backgroundColor: colors.surfaceSubtle,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  onboardingCommandText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 16,
     fontFamily: typography.mono,
   },
   modalTitle: {
