@@ -217,6 +217,57 @@ const BUILT_IN_TEMPLATES: AgentTemplate[] = [
 ];
 
 const MODEL_OPTIONS = ['gpt-5.1-codex', 'gpt-5-codex', 'gpt-4.1'];
+const EXEC_PRESETS_KEY = 'taskdex_exec_presets_v1';
+const EXEC_RUNS_KEY = 'taskdex_exec_runs_v1';
+
+type ExecModeType = 'task' | 'flow';
+type ExecRunStatus = 'starting' | 'running' | 'completed' | 'failed';
+
+interface ExecPreset {
+  id: string;
+  name: string;
+  mode: ExecModeType;
+  prompt: string;
+  steps: string[];
+  model: string;
+  cwd: string;
+  approvalPolicy: 'never' | 'on-request';
+  systemPrompt: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+interface ExecRunRecord {
+  id: string;
+  presetId?: string;
+  name: string;
+  mode: ExecModeType;
+  status: ExecRunStatus;
+  stepCount: number;
+  startedAt: number;
+  finishedAt?: number;
+  threadId?: string;
+  workspaceId?: string;
+  error?: string;
+}
+
+function createExecId(prefix: string): string {
+  return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function parseFlowSteps(raw: string): string[] {
+  return raw
+    .split('\n')
+    .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
+    .filter((line) => line.length > 0);
+}
+
+function formatExecRunTime(timestamp?: number): string {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString();
+}
 
 function messageIdentity(message: AgentMessage): string {
   if (message._itemId) return `item:${message._itemId}`;
@@ -274,6 +325,7 @@ function WorkspaceScreen({
   const updateQueuedMessage = useAgentStore((state) => state.updateQueuedMessage);
   const removeQueuedMessage = useAgentStore((state) => state.removeQueuedMessage);
   const moveQueuedMessage = useAgentStore((state) => state.moveQueuedMessage);
+  const enqueueQueuedMessage = useAgentStore((state) => state.enqueueQueuedMessage);
   const clearQueuedMessages = useAgentStore((state) => state.clearQueuedMessages);
   const prependQueuedMessage = useAgentStore((state) => state.prependQueuedMessage);
   const setAgentMessages = useAgentStore((state) => state.setAgentMessages);
@@ -312,6 +364,7 @@ function WorkspaceScreen({
   const [showAgentDashboard, setShowAgentDashboard] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showUsageModal, setShowUsageModal] = useState(false);
+  const [showExecRunner, setShowExecRunner] = useState(false);
   const [agentDashboardFilter, setAgentDashboardFilter] = useState<'all' | 'active' | 'stopped'>('all');
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedWorkspaceId, setExpandedWorkspaceId] = useState<string | null>(null);
@@ -399,6 +452,18 @@ function WorkspaceScreen({
   const [workspaceGraphEnabled, setWorkspaceGraphEnabled] = useState(false);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
+  const [execLoaded, setExecLoaded] = useState(false);
+  const [runningExec, setRunningExec] = useState(false);
+  const [execPresets, setExecPresets] = useState<ExecPreset[]>([]);
+  const [execRuns, setExecRuns] = useState<ExecRunRecord[]>([]);
+  const [execNameInput, setExecNameInput] = useState('');
+  const [execModeInput, setExecModeInput] = useState<ExecModeType>('task');
+  const [execPromptInput, setExecPromptInput] = useState('');
+  const [execFlowInput, setExecFlowInput] = useState('');
+  const [execModelInput, setExecModelInput] = useState('gpt-5.1-codex');
+  const [execCwdInput, setExecCwdInput] = useState('/Users/apple/Work/DhruvalPersonal');
+  const [execApprovalPolicyInput, setExecApprovalPolicyInput] = useState<'never' | 'on-request'>('never');
+  const [execSystemPromptInput, setExecSystemPromptInput] = useState('');
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -494,6 +559,311 @@ function WorkspaceScreen({
   useEffect(() => {
     setApiKeyInput(bridgeApiKey);
   }, [bridgeApiKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadExecState = async () => {
+      try {
+        const [savedPresets, savedRuns] = await Promise.all([
+          AsyncStorage.getItem(EXEC_PRESETS_KEY),
+          AsyncStorage.getItem(EXEC_RUNS_KEY),
+        ]);
+        if (cancelled) return;
+
+        if (savedPresets) {
+          const parsed = JSON.parse(savedPresets) as ExecPreset[];
+          if (Array.isArray(parsed)) {
+            setExecPresets(parsed);
+          }
+        }
+        if (savedRuns) {
+          const parsed = JSON.parse(savedRuns) as ExecRunRecord[];
+          if (Array.isArray(parsed)) {
+            setExecRuns(parsed);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setExecPresets([]);
+          setExecRuns([]);
+        }
+      } finally {
+        if (!cancelled) setExecLoaded(true);
+      }
+    };
+
+    void loadExecState();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!execLoaded) return;
+    AsyncStorage.setItem(EXEC_PRESETS_KEY, JSON.stringify(execPresets)).catch(() => {});
+  }, [execLoaded, execPresets]);
+
+  useEffect(() => {
+    if (!execLoaded) return;
+    AsyncStorage.setItem(EXEC_RUNS_KEY, JSON.stringify(execRuns.slice(0, 80))).catch(() => {});
+  }, [execLoaded, execRuns]);
+
+  useEffect(() => {
+    if (!execRuns.length) return;
+    const agentById = new Map(agents.map((agent) => [agent.id, agent]));
+    let changed = false;
+
+    const nextRuns = execRuns.map((run) => {
+      if (run.status !== 'running' || !run.threadId) return run;
+      const agent = agentById.get(run.threadId);
+      if (!agent) return run;
+      if (agent.status === 'error') {
+        changed = true;
+        return {
+          ...run,
+          status: 'failed' as const,
+          error: run.error || 'Agent reported a turn failure',
+          finishedAt: run.finishedAt || Date.now(),
+        };
+      }
+      if (agent.status === 'ready' && (agent.queuedMessages?.length || 0) === 0) {
+        changed = true;
+        return {
+          ...run,
+          status: 'completed' as const,
+          finishedAt: run.finishedAt || Date.now(),
+        };
+      }
+      return run;
+    });
+
+    if (changed) {
+      setExecRuns(nextRuns);
+    }
+  }, [agents, execRuns]);
+
+  const openExecRunner = useCallback(() => {
+    setShowMoreMenu(false);
+    if (activeWorkspace) {
+      setExecModelInput(activeWorkspace.model || 'gpt-5.1-codex');
+      setExecCwdInput(activeWorkspace.cwd || '/Users/apple/Work/DhruvalPersonal');
+      setExecApprovalPolicyInput(
+        activeWorkspace.approvalPolicy === 'on-request' ? 'on-request' : 'never',
+      );
+      setExecSystemPromptInput(activeWorkspace.systemPrompt || '');
+      setExecNameInput((current) => current || `${activeWorkspace.name} job`);
+    }
+    setShowExecRunner(true);
+  }, [activeWorkspace]);
+
+  const applyExecPresetToForm = useCallback((preset: ExecPreset) => {
+    setExecNameInput(preset.name);
+    setExecModeInput(preset.mode);
+    setExecPromptInput(preset.prompt);
+    setExecFlowInput(preset.steps.join('\n'));
+    setExecModelInput(preset.model);
+    setExecCwdInput(preset.cwd);
+    setExecApprovalPolicyInput(preset.approvalPolicy);
+    setExecSystemPromptInput(preset.systemPrompt);
+  }, []);
+
+  const handleSaveExecPreset = useCallback(() => {
+    const name = execNameInput.trim();
+    const mode = execModeInput;
+    const prompt = execPromptInput.trim();
+    const steps = parseFlowSteps(execFlowInput);
+    const model = execModelInput.trim() || 'gpt-5.1-codex';
+    const cwd = execCwdInput.trim() || '/Users/apple/Work/DhruvalPersonal';
+
+    if (!name) {
+      Alert.alert('Missing name', 'Add a preset name to save automation.');
+      return;
+    }
+    if (mode === 'task' && !prompt) {
+      Alert.alert('Missing prompt', 'Task mode needs a prompt.');
+      return;
+    }
+    if (mode === 'flow' && steps.length === 0) {
+      Alert.alert('Missing steps', 'Flow mode needs one or more steps.');
+      return;
+    }
+
+    const now = Date.now();
+    const preset: ExecPreset = {
+      id: createExecId('exec'),
+      name,
+      mode,
+      prompt,
+      steps,
+      model,
+      cwd,
+      approvalPolicy: execApprovalPolicyInput,
+      systemPrompt: execSystemPromptInput,
+      createdAt: now,
+      updatedAt: now,
+    };
+    setExecPresets((current) => [preset, ...current].slice(0, 40));
+  }, [
+    execApprovalPolicyInput,
+    execCwdInput,
+    execFlowInput,
+    execModeInput,
+    execModelInput,
+    execNameInput,
+    execPromptInput,
+    execSystemPromptInput,
+  ]);
+
+  const handleDeleteExecPreset = useCallback((presetId: string) => {
+    setExecPresets((current) => current.filter((entry) => entry.id !== presetId));
+  }, []);
+
+  const handleRunExec = useCallback(async (preset?: ExecPreset) => {
+    const mode = preset?.mode || execModeInput;
+    const name = (preset?.name || execNameInput || '').trim() || 'Exec run';
+    const model = (preset?.model || execModelInput || '').trim() || 'gpt-5.1-codex';
+    const cwd = (preset?.cwd || execCwdInput || '').trim() || '/Users/apple/Work/DhruvalPersonal';
+    const approvalPolicy = preset?.approvalPolicy || execApprovalPolicyInput;
+    const systemPrompt = preset?.systemPrompt || execSystemPromptInput;
+    const prompt = (preset?.prompt || execPromptInput || '').trim();
+    const steps = mode === 'flow'
+      ? (preset?.steps?.length ? preset.steps : parseFlowSteps(execFlowInput))
+      : [prompt];
+
+    if (mode === 'task' && !prompt) {
+      Alert.alert('Missing prompt', 'Task mode needs a prompt.');
+      return;
+    }
+    if (mode === 'flow' && steps.length === 0) {
+      Alert.alert('Missing steps', 'Flow mode needs one or more steps.');
+      return;
+    }
+
+    const runId = createExecId('run');
+    const startedAt = Date.now();
+    const nextRun: ExecRunRecord = {
+      id: runId,
+      presetId: preset?.id,
+      name,
+      mode,
+      status: 'starting',
+      stepCount: steps.length,
+      startedAt,
+    };
+    setExecRuns((current) => [nextRun, ...current].slice(0, 80));
+    setRunningExec(true);
+
+    try {
+      const createdAgent = await createAgent(`Exec · ${name}`, model, cwd, {
+        approvalPolicy,
+        systemPrompt,
+      });
+
+      const threadTitle = `${name} • ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+      const existingExecWorkspace = workspaces.find((workspace) => workspace.name === 'Exec Mode');
+      let workspaceId = existingExecWorkspace?.id;
+      if (workspaceId) {
+        addThreadToWorkspace({
+          workspaceId,
+          threadAgentId: createdAgent.id,
+          title: threadTitle,
+          makeActive: false,
+        });
+      } else {
+        workspaceId = createWorkspace({
+          name: 'Exec Mode',
+          model,
+          cwd,
+          approvalPolicy,
+          systemPrompt,
+          templateId: 'exec_mode',
+          templateIcon: 'flash',
+          firstThreadAgentId: createdAgent.id,
+          firstThreadTitle: threadTitle,
+          makeActive: false,
+        });
+        await persistWorkspaceRecord({
+          id: workspaceId,
+          bridgeUrl,
+          name: 'Exec Mode',
+          model,
+          cwd,
+          approvalPolicy,
+          systemPrompt,
+          templateId: 'exec_mode',
+          templateIcon: 'flash',
+          createdAt: Date.now(),
+        });
+      }
+
+      await persistThreadRecord({
+        id: createdAgent.id,
+        workspaceId,
+        title: threadTitle,
+        bridgeAgentId: createdAgent.id,
+        createdAt: Date.now(),
+      });
+
+      await sendMessage(createdAgent.id, steps[0] || prompt);
+      for (let i = 1; i < steps.length; i += 1) {
+        enqueueQueuedMessage(createdAgent.id, steps[i] || '');
+      }
+      if (steps.length > 1) {
+        useAgentStore.getState().updateAgentActivity(
+          createdAgent.id,
+          `Queued ${steps.length - 1} message${steps.length - 1 === 1 ? '' : 's'}`,
+        );
+      }
+
+      setExecRuns((current) =>
+        current.map((run) =>
+          run.id === runId
+            ? {
+              ...run,
+              status: 'running',
+              threadId: createdAgent.id,
+              workspaceId,
+            }
+            : run,
+        ));
+    } catch (err) {
+      setExecRuns((current) =>
+        current.map((run) =>
+          run.id === runId
+            ? {
+              ...run,
+              status: 'failed',
+              finishedAt: Date.now(),
+              error: toUserErrorMessage(err, 'Could not start exec run'),
+            }
+            : run,
+        ));
+      Alert.alert('Exec run failed', toUserErrorMessage(err, 'Could not start exec run'));
+    } finally {
+      setRunningExec(false);
+    }
+  }, [
+    addThreadToWorkspace,
+    bridgeUrl,
+    createAgent,
+    createWorkspace,
+    enqueueQueuedMessage,
+    execApprovalPolicyInput,
+    execCwdInput,
+    execFlowInput,
+    execModeInput,
+    execModelInput,
+    execNameInput,
+    execPromptInput,
+    execSystemPromptInput,
+    sendMessage,
+    workspaces,
+  ]);
+
+  const handleClearExecRuns = useCallback(() => {
+    setExecRuns([]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -3064,6 +3434,220 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
+      <Modal visible={showExecRunner} transparent={true} animationType="fade" onRequestClose={() => setShowExecRunner(false)}>
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Exec Mode</Text>
+            <Text style={s.themeHint}>Run non-interactive Codex jobs and multi-step automation flows.</Text>
+
+            <Text style={s.label}>Job Name</Text>
+            <TextInput
+              style={s.input}
+              value={execNameInput}
+              onChangeText={setExecNameInput}
+              placeholder="Nightly bug sweep"
+              placeholderTextColor={colors.textMuted}
+              autoCorrect={false}
+            />
+
+            <Text style={s.label}>Mode</Text>
+            <View style={s.themeModeRow}>
+              {(['task', 'flow'] as ExecModeType[]).map((mode) => (
+                <Pressable
+                  key={mode}
+                  style={[s.themeModeChip, execModeInput === mode && s.themeModeChipActive]}
+                  onPress={() => setExecModeInput(mode)}
+                >
+                  <Text style={[s.themeModeChipText, execModeInput === mode && s.themeModeChipTextActive]}>
+                    {mode}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {execModeInput === 'task' ? (
+              <>
+                <Text style={s.label}>Prompt</Text>
+                <TextInput
+                  style={[s.input, s.systemPromptInput]}
+                  value={execPromptInput}
+                  onChangeText={setExecPromptInput}
+                  placeholder="Run full code review and commit safe fixes."
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                />
+              </>
+            ) : (
+              <>
+                <Text style={s.label}>Flow Steps (one per line)</Text>
+                <TextInput
+                  style={[s.input, s.systemPromptInput]}
+                  value={execFlowInput}
+                  onChangeText={setExecFlowInput}
+                  placeholder={`Audit current branch\nFix P0/P1 issues\nRun tests and commit`}
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                />
+              </>
+            )}
+
+            <Text style={s.label}>Model</Text>
+            <TextInput
+              style={s.input}
+              value={execModelInput}
+              onChangeText={setExecModelInput}
+              placeholder="gpt-5.1-codex"
+              placeholderTextColor={colors.textMuted}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+
+            <Text style={s.label}>Working Directory</Text>
+            <TextInput
+              style={s.input}
+              value={execCwdInput}
+              onChangeText={setExecCwdInput}
+              placeholder="/Users/apple/Work/DhruvalPersonal"
+              placeholderTextColor={colors.textMuted}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+
+            <Text style={s.label}>Approval Policy</Text>
+            <View style={s.themeModeRow}>
+              {(['never', 'on-request'] as const).map((policy) => (
+                <Pressable
+                  key={policy}
+                  style={[s.themeModeChip, execApprovalPolicyInput === policy && s.themeModeChipActive]}
+                  onPress={() => setExecApprovalPolicyInput(policy)}
+                >
+                  <Text style={[s.themeModeChipText, execApprovalPolicyInput === policy && s.themeModeChipTextActive]}>
+                    {policy}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={s.label}>System Prompt (optional)</Text>
+            <TextInput
+              style={[s.input, s.systemPromptInput]}
+              value={execSystemPromptInput}
+              onChangeText={setExecSystemPromptInput}
+              placeholder="Always include tests and concise summary."
+              placeholderTextColor={colors.textMuted}
+              multiline
+            />
+
+            <View style={s.execActionRow}>
+              <Pressable style={s.cancelBtn} onPress={handleSaveExecPreset}>
+                <Text style={s.cancelText}>Save Preset</Text>
+              </Pressable>
+              <Pressable
+                style={[s.primaryBtn, runningExec && s.smallActionBtnDisabled]}
+                onPress={() => void handleRunExec()}
+                disabled={runningExec}
+              >
+                <Text style={s.primaryText}>{runningExec ? 'Starting...' : 'Run Now'}</Text>
+              </Pressable>
+            </View>
+
+            <Text style={s.label}>Saved Automations</Text>
+            <ScrollView style={s.execListWrap}>
+              {execPresets.map((preset) => (
+                <View key={preset.id} style={s.execListRow}>
+                  <View style={s.execListRowTop}>
+                    <Text style={s.execListTitle} numberOfLines={1}>{preset.name}</Text>
+                    <Text style={s.execListBadge}>{preset.mode}</Text>
+                  </View>
+                  <Text style={s.execListMeta} numberOfLines={1}>
+                    {preset.model} • {preset.cwd}
+                  </Text>
+                  <Text style={s.execListMeta} numberOfLines={1}>
+                    {preset.mode === 'flow' ? `${preset.steps.length} steps` : 'Single task'}
+                  </Text>
+                  <View style={s.execListActions}>
+                    <Pressable style={s.cancelBtn} onPress={() => applyExecPresetToForm(preset)}>
+                      <Text style={s.cancelText}>Load</Text>
+                    </Pressable>
+                    <Pressable style={s.cancelBtn} onPress={() => void handleRunExec(preset)}>
+                      <Text style={s.cancelText}>Run</Text>
+                    </Pressable>
+                    <Pressable style={s.cancelBtn} onPress={() => handleDeleteExecPreset(preset.id)}>
+                      <Text style={s.cancelText}>Delete</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ))}
+              {execPresets.length === 0 && (
+                <Text style={s.fileHint}>Save a preset to reuse job/flow definitions.</Text>
+              )}
+            </ScrollView>
+
+            <Text style={s.label}>Recent Runs</Text>
+            <ScrollView style={s.execRunsWrap}>
+              {execRuns.map((run) => (
+                <View key={run.id} style={s.execListRow}>
+                  <View style={s.execListRowTop}>
+                    <Text style={s.execListTitle} numberOfLines={1}>{run.name}</Text>
+                    <Text
+                      style={[
+                        s.execRunStatus,
+                        run.status === 'completed' && s.execRunStatusCompleted,
+                        run.status === 'failed' && s.execRunStatusFailed,
+                      ]}
+                    >
+                      {run.status}
+                    </Text>
+                  </View>
+                  <Text style={s.execListMeta} numberOfLines={1}>
+                    {run.mode} • {run.stepCount} step{run.stepCount === 1 ? '' : 's'}
+                  </Text>
+                  <Text style={s.execListMeta} numberOfLines={1}>
+                    started {formatExecRunTime(run.startedAt)}
+                  </Text>
+                  {!!run.finishedAt && (
+                    <Text style={s.execListMeta} numberOfLines={1}>
+                      finished {formatExecRunTime(run.finishedAt)}
+                    </Text>
+                  )}
+                  {!!run.error && (
+                    <Text style={s.fileErrorText} numberOfLines={2}>
+                      {run.error}
+                    </Text>
+                  )}
+                  {!!run.workspaceId && !!run.threadId && (
+                    <View style={s.execListActions}>
+                      <Pressable
+                        style={s.cancelBtn}
+                        onPress={() => {
+                          setActiveWorkspace(run.workspaceId!);
+                          setActiveThread(run.workspaceId!, run.threadId!);
+                          setShowExecRunner(false);
+                        }}
+                      >
+                        <Text style={s.cancelText}>Open Thread</Text>
+                      </Pressable>
+                    </View>
+                  )}
+                </View>
+              ))}
+              {execRuns.length === 0 && (
+                <Text style={s.fileHint}>No runs yet.</Text>
+              )}
+            </ScrollView>
+
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={handleClearExecRuns}>
+                <Text style={s.cancelText}>Clear Runs</Text>
+              </Pressable>
+              <Pressable style={s.cancelBtn} onPress={() => setShowExecRunner(false)}>
+                <Text style={s.cancelText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <Modal visible={showMoreMenu} transparent={true} animationType="fade" onRequestClose={() => setShowMoreMenu(false)}>
         <Pressable style={s.modalOverlay} onPress={() => setShowMoreMenu(false)}>
           <Pressable style={s.moreMenuSheet} onPress={() => {}}>
@@ -3074,6 +3658,7 @@ function WorkspaceScreen({
               { icon: 'people-outline' as const, label: 'Agents', onPress: () => { setShowMoreMenu(false); setShowAgentDashboard(true); } },
               { icon: 'bar-chart-outline' as const, label: 'Usage', onPress: () => { setShowMoreMenu(false); setShowUsageModal(true); } },
               { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => { setShowMoreMenu(false); setShowNotificationsModal(true); } },
+              { icon: 'flash-outline' as const, label: 'Exec Mode', onPress: openExecRunner },
               { icon: 'build-outline' as const, label: 'Agent Config', onPress: () => { setShowMoreMenu(false); setShowEditModel(true); }, disabled: !activeAgent },
             ].map((item) => (
               <Pressable
@@ -4092,6 +4677,77 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     color: '#c23a3a',
     fontSize: 12,
     fontFamily: typography.medium,
+  },
+  execActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginBottom: 10,
+  },
+  execListWrap: {
+    maxHeight: 210,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+    marginBottom: 10,
+  },
+  execRunsWrap: {
+    maxHeight: 180,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  execListRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 2,
+  },
+  execListRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  execListTitle: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontFamily: typography.semibold,
+  },
+  execListBadge: {
+    color: colors.accent,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    fontFamily: typography.semibold,
+  },
+  execListMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: typography.mono,
+  },
+  execListActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 6,
+    marginTop: 6,
+  },
+  execRunStatus: {
+    color: colors.textMuted,
+    fontSize: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    fontFamily: typography.semibold,
+  },
+  execRunStatusCompleted: {
+    color: '#2f9f5d',
+  },
+  execRunStatusFailed: {
+    color: '#c23a3a',
   },
   repoRow: {
     flexDirection: 'row',
