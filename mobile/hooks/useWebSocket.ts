@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
+import * as Haptics from 'expo-haptics';
 import { useAgentStore } from '../stores/agentStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { startAgentActivity, updateAgentActivity, stopAgentActivity, isLiveActivitySupported } from './useLiveActivity';
@@ -482,6 +483,7 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       activeTurnsByAgent.delete(agentId);
       store.updateAgentStatus(agentId, 'ready');
       void stopAgentActivity(agentId, 'Completed');
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
       void flushQueuedIfReady(agentId);
       break;
     }
@@ -511,6 +513,7 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       store.updateAgentStatus(agentId, 'error');
       store.updateAgentActivity(agentId, 'Turn failed');
       void stopAgentActivity(agentId, 'Failed');
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
       break;
     }
     case 'item/started': {

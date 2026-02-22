@@ -1,5 +1,5 @@
-import React, { memo, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Linking, Pressable } from 'react-native';
+import React, { memo, useMemo, useState, useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, Linking, Pressable, Animated } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import * as Clipboard from 'expo-clipboard';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
@@ -18,6 +18,7 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
   const styles = useMemo(() => createStyles(colors), [colors]);
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [outputExpanded, setOutputExpanded] = useState(false);
+  const motion = useRef(new Animated.Value(0)).current;
   const userForeground = colors.background;
   const syntaxTheme = useMemo(
     () => (isDarkPalette(colors) ? atomOneDark : atomOneLight),
@@ -76,6 +77,32 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
     [message.text, msgType],
   );
   const shouldRenderMarkdown = !message.streaming;
+  const animatedStyle = useMemo(
+    () => ({
+      opacity: motion,
+      transform: [{
+        translateY: motion.interpolate({
+          inputRange: [0, 1],
+          outputRange: [8, 0],
+        }),
+      }],
+    }),
+    [motion],
+  );
+
+  useEffect(() => {
+    Animated.timing(motion, {
+      toValue: 1,
+      duration: 180,
+      useNativeDriver: true,
+    }).start();
+  }, [motion]);
+
+  const withMotion = (content: React.ReactNode) => (
+    <Animated.View style={animatedStyle}>
+      {content}
+    </Animated.View>
+  );
 
   const handleLinkPress = (url: string) => {
     Linking.openURL(url).catch(() => {});
@@ -83,20 +110,20 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
   };
 
   if (isUser) {
-    return (
+    return withMotion(
       <View style={[styles.row, styles.rowUser]}>
         <View style={styles.bubbleUser}>
           <Markdown style={markdownStylesUser as any} onLinkPress={handleLinkPress}>
             {message.text || ''}
           </Markdown>
         </View>
-      </View>
+      </View>,
     );
   }
 
   switch (msgType) {
     case 'thinking':
-      return (
+      return withMotion(
         <View style={styles.row}>
           <View style={styles.bubbleThinking}>
             <Text style={styles.typeLabel}>Thinking</Text>
@@ -122,11 +149,11 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
               </>
             )}
           </View>
-        </View>
+        </View>,
       );
 
     case 'command':
-      return (
+      return withMotion(
         <View style={styles.row}>
           <View style={styles.terminalLine}>
             <Text style={styles.terminalPrompt}>$</Text>
@@ -135,11 +162,11 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
             </Text>
             {message.streaming && <Text style={styles.terminalCursor}>█</Text>}
           </View>
-        </View>
+        </View>,
       );
 
     case 'command_output':
-      return (
+      return withMotion(
         <View style={styles.row}>
           <View style={styles.terminalOutput}>
             <Text style={styles.terminalOutputText}>
@@ -152,11 +179,11 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
             )}
             {message.streaming && <Text style={styles.terminalCursor}>█</Text>}
           </View>
-        </View>
+        </View>,
       );
 
     case 'file_change':
-      return (
+      return withMotion(
         <View style={styles.row}>
           <View style={styles.bubbleFile}>
             <Text style={styles.typeLabel}>File Change</Text>
@@ -173,11 +200,11 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
               </Pressable>
             )}
           </View>
-        </View>
+        </View>,
       );
 
     default:
-      return (
+      return withMotion(
         <View style={styles.row}>
           <View style={styles.bubbleAgent}>
             {shouldRenderMarkdown ? (
@@ -188,7 +215,7 @@ function ChatBubbleBase({ message, colors, onFilePress }: Props) {
               <Text style={styles.textAgent}>{message.text}</Text>
             )}
           </View>
-        </View>
+        </View>,
       );
   }
 }

@@ -15,6 +15,8 @@ import {
   AppState,
   Share,
   Linking,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -26,6 +28,7 @@ import { ConvexProvider, useQuery } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BarCodeScanner, type BarCodeScannedCallback } from 'expo-barcode-scanner';
+import * as Haptics from 'expo-haptics';
 import {
   Manrope_400Regular,
   Manrope_500Medium,
@@ -366,6 +369,22 @@ function WorkspaceScreen({
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
 
+  useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
+
+  const openSidebar = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setShowSidebar(true);
+  }, []);
+
+  const closeSidebar = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setShowSidebar(false);
+  }, []);
+
   const activeWorkspace = useMemo(() => {
     if (!workspaces.length) return null;
     return workspaces.find((w) => w.id === activeWorkspaceId) || workspaces[0];
@@ -607,8 +626,8 @@ function WorkspaceScreen({
   }, [activeAgent?.id]);
 
   useEffect(() => {
-    if (!activeWorkspace || !activeAgent) setShowSidebar(true);
-  }, [activeWorkspace?.id, activeAgent?.id]);
+    if (!activeWorkspace || !activeAgent) openSidebar();
+  }, [activeWorkspace?.id, activeAgent?.id, openSidebar]);
 
   useEffect(() => {
     if (!activeWorkspace?.id) return;
@@ -1278,6 +1297,7 @@ function WorkspaceScreen({
       return;
     }
 
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
     void sendMessage(activeAgent.id, trimmed);
   }, [activeAgent, clearAgentMessages, interruptAgent, sendMessage]);
 
@@ -1506,6 +1526,7 @@ function WorkspaceScreen({
     return base.filter((msg) => (msg.text || '').toLowerCase().includes(normalizedSearch));
   }, [activeAgent, normalizedSearch, searchScope, showActivity]);
   const hasAnyMessages = (activeAgent?.messages.length || 0) > 0;
+  const isThreadHydrating = !!activeThreadId && !liveThreadMessages && !hasAnyMessages;
   const typingLabel = useMemo(() => {
     if (!activeAgent || activeAgent.status !== 'working') return 'Working';
     if (activeAgent.activityLabel?.trim()) return activeAgent.activityLabel.trim();
@@ -1720,7 +1741,7 @@ function WorkspaceScreen({
     >
       <View style={s.topBar}>
         <View style={s.topLeft}>
-          <Pressable style={s.menuBtn} onPress={() => setShowSidebar(true)}>
+          <Pressable style={s.menuBtn} onPress={openSidebar}>
             <Ionicons name="chatbubbles-outline" size={16} color={colors.background} />
           </Pressable>
           <View>
@@ -1842,6 +1863,12 @@ function WorkspaceScreen({
               <Text style={s.emptyTitle}>No Thread Selected</Text>
               <Text style={s.emptySub}>Create an agent, then start a thread.</Text>
             </View>
+          </View>
+        ) : isThreadHydrating ? (
+          <View style={s.skeletonWrap}>
+            <View style={s.skeletonBubbleWide} />
+            <View style={s.skeletonBubbleMid} />
+            <View style={s.skeletonBubbleShort} />
           </View>
         ) : !hasAnyMessages && isAgentWorking ? (
           <View style={s.emptyWrap}>
@@ -1979,7 +2006,7 @@ function WorkspaceScreen({
           <View style={[s.sidebar, { paddingBottom: insets.bottom }]}>
             <View style={s.sidebarHeader}>
               <Text style={s.sidebarTitle}>Chats</Text>
-              <Pressable style={s.sidebarCloseBtn} onPress={() => setShowSidebar(false)}>
+              <Pressable style={s.sidebarCloseBtn} onPress={closeSidebar}>
                 <Ionicons name="close" size={16} color={colors.textSecondary} />
               </Pressable>
             </View>
@@ -2066,7 +2093,7 @@ function WorkspaceScreen({
                                 onPress={() => {
                                   setActiveWorkspace(workspace.id);
                                   setActiveThread(workspace.id, thread.id);
-                                  setShowSidebar(false);
+                                  closeSidebar();
                                 }}
                                 onLongPress={() => handleRemoveThread(workspace.id, thread.id, thread.title)}
                               >
@@ -2096,7 +2123,7 @@ function WorkspaceScreen({
               </View>
             </ScrollView>
           </View>
-          <Pressable style={s.sidebarScrim} onPress={() => setShowSidebar(false)} />
+          <Pressable style={s.sidebarScrim} onPress={closeSidebar} />
         </View>
       )}
 
@@ -3470,6 +3497,36 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingHorizontal: 16,
+  },
+  skeletonWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 20,
+  },
+  skeletonBubbleWide: {
+    height: 52,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+    width: '88%',
+  },
+  skeletonBubbleMid: {
+    height: 46,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+    width: '74%',
+  },
+  skeletonBubbleShort: {
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+    width: '62%',
   },
   emptyCard: {
     backgroundColor: colors.surface,

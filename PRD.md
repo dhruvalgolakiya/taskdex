@@ -303,10 +303,10 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 10.3 Haptics & Animations
 
-- [ ] Haptic on send and receive
-- [ ] Message slide-in animation
-- [ ] Skeleton loading states
-- [ ] Smooth sidebar transitions
+- [x] Haptic on send and receive
+- [x] Message slide-in animation
+- [x] Skeleton loading states
+- [x] Smooth sidebar transitions
 
 ### 10.4 Error Handling
 
