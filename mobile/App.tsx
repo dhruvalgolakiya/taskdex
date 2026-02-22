@@ -196,6 +196,7 @@ function WorkspaceScreen({
   const setBridgeUrl = useAgentStore((state) => state.setBridgeUrl);
   const setBridgeApiKey = useAgentStore((state) => state.setBridgeApiKey);
   const removeAgent = useAgentStore((state) => state.removeAgent);
+  const setAgents = useAgentStore((state) => state.setAgents);
   const updateQueuedMessage = useAgentStore((state) => state.updateQueuedMessage);
   const removeQueuedMessage = useAgentStore((state) => state.removeQueuedMessage);
   const moveQueuedMessage = useAgentStore((state) => state.moveQueuedMessage);
@@ -215,6 +216,7 @@ function WorkspaceScreen({
     setActiveThread,
     removeThreadFromWorkspace,
     updateWorkspaceModel,
+    replaceThreadAgentId,
     setWorkspacesFromConvex,
     ensureWorkspacesFromAgents,
     cleanupMissingAgentThreads,
@@ -226,6 +228,8 @@ function WorkspaceScreen({
   const [showCreateThread, setShowCreateThread] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showEditModel, setShowEditModel] = useState(false);
+  const [showAgentDashboard, setShowAgentDashboard] = useState(false);
+  const [agentDashboardFilter, setAgentDashboardFilter] = useState<'all' | 'active' | 'stopped'>('all');
   const [showSidebar, setShowSidebar] = useState(false);
   const [expandedWorkspaceId, setExpandedWorkspaceId] = useState<string | null>(null);
   const previousStatusesRef = useRef<Record<string, string>>({});
@@ -1263,6 +1267,96 @@ function WorkspaceScreen({
     if (lastAgentMessage?.type === 'command' || lastAgentMessage?.type === 'command_output') return 'Running';
     return 'Typing';
   }, [activeAgent]);
+  const dashboardAgents = useMemo(() => {
+    const byId = new Map(agents.map((agent) => [agent.id, agent]));
+    const rows = workspaces.flatMap((workspace) =>
+      workspace.threads.map((thread) => {
+        const agent = byId.get(thread.id);
+        const lastMessage = [...(agent?.messages || [])].reverse()[0];
+        const lastTimestamp = lastMessage?.timestamp || thread.createdAt;
+        return {
+          workspaceId: workspace.id,
+          threadId: thread.id,
+          workspaceName: workspace.name,
+          threadTitle: thread.title,
+          model: agent?.model || workspace.model,
+          status: agent?.status || 'stopped',
+          lastPreview: (lastMessage?.text || '').replace(/\s+/g, ' ').trim().slice(0, 90),
+          minutesAgo: Math.max(0, Math.round((Date.now() - lastTimestamp) / 60000)),
+        };
+      }),
+    );
+    return rows.filter((row) => {
+      if (agentDashboardFilter === 'active') return row.status !== 'stopped';
+      if (agentDashboardFilter === 'stopped') return row.status === 'stopped';
+      return true;
+    });
+  }, [agentDashboardFilter, agents, workspaces]);
+
+  const handleOpenDashboardThread = useCallback((workspaceId: string, threadId: string) => {
+    setActiveWorkspace(workspaceId);
+    setActiveThread(workspaceId, threadId);
+    setShowAgentDashboard(false);
+  }, [setActiveThread, setActiveWorkspace]);
+
+  const handleRestartStoppedThread = useCallback(async (workspaceId: string, threadId: string) => {
+    const workspace = workspaces.find((entry) => entry.id === workspaceId);
+    if (!workspace) return;
+    try {
+      const newAgent = await createAgent(
+        workspace.name,
+        workspace.model,
+        workspace.cwd,
+        {
+          approvalPolicy: workspace.approvalPolicy,
+          systemPrompt: workspace.systemPrompt,
+        },
+      );
+      const nextAgents = agents.map((entry) =>
+        entry.id === threadId
+          ? {
+            ...entry,
+            id: newAgent.id,
+            status: newAgent.status,
+            threadId: newAgent.threadId,
+            currentTurnId: null,
+          }
+          : entry,
+      );
+      setAgents(nextAgents);
+      replaceThreadAgentId(workspaceId, threadId, newAgent.id);
+      await persistThreadRecord({
+        id: newAgent.id,
+        workspaceId,
+        title: workspace.threads.find((thread) => thread.id === threadId)?.title || 'Thread',
+        bridgeAgentId: newAgent.id,
+        createdAt: Date.now(),
+      });
+    } catch (err: any) {
+      Alert.alert('Restart failed', err?.message || 'Could not restart agent');
+    }
+  }, [agents, createAgent, replaceThreadAgentId, setAgents, workspaces]);
+
+  const handleDashboardLongPress = useCallback((workspaceId: string, threadId: string, status: string) => {
+    Alert.alert('Agent actions', undefined, [
+      ...(status === 'stopped'
+        ? [{
+          text: 'Restart',
+          onPress: () => {
+            void handleRestartStoppedThread(workspaceId, threadId);
+          },
+        }]
+        : [{
+          text: 'Stop',
+          style: 'destructive' as const,
+          onPress: () => {
+            void stopAgent(threadId);
+          },
+        }]),
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  }, [handleRestartStoppedThread, stopAgent]);
+
   const handleMessageActions = useCallback((message: AgentMessage) => {
     if (!activeAgent) return;
     Alert.alert('Message actions', undefined, [
@@ -1387,6 +1481,12 @@ function WorkspaceScreen({
             disabled={!activeWorkspace}
           >
             <Text style={s.headerPillText}>Git</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setShowAgentDashboard(true)}
+            style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}
+          >
+            <Text style={s.headerPillText}>Agents</Text>
           </Pressable>
           <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerPillBtn, pressed && s.pressed]}>
             <Text style={s.headerPillText}>Settings</Text>
@@ -2039,6 +2139,60 @@ function WorkspaceScreen({
                 disabled={committingGit || !!gitStatus?.isClean}
               >
                 <Text style={s.primaryText}>{committingGit ? 'Committing...' : 'Commit'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showAgentDashboard} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={[s.modal, s.fileBrowserModal]}>
+            <Text style={s.modalTitle}>Agent Dashboard</Text>
+            <View style={s.themeModeRow}>
+              {(['all', 'active', 'stopped'] as const).map((filter) => (
+                <Pressable
+                  key={filter}
+                  style={[s.themeModeChip, agentDashboardFilter === filter && s.themeModeChipActive]}
+                  onPress={() => setAgentDashboardFilter(filter)}
+                >
+                  <Text style={[s.themeModeChipText, agentDashboardFilter === filter && s.themeModeChipTextActive]}>
+                    {filter}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <ScrollView style={s.fileListWrap}>
+              {dashboardAgents.map((row) => (
+                <Pressable
+                  key={`${row.workspaceId}_${row.threadId}`}
+                  style={s.dashboardRow}
+                  onPress={() => handleOpenDashboardThread(row.workspaceId, row.threadId)}
+                  onLongPress={() => handleDashboardLongPress(row.workspaceId, row.threadId, row.status)}
+                >
+                  <View style={s.dashboardRowTop}>
+                    <Text style={s.dashboardTitle} numberOfLines={1}>
+                      {row.workspaceName} · {row.threadTitle}
+                    </Text>
+                    <Text style={[s.dashboardStatusDot, row.status === 'stopped' && s.dashboardStatusDotStopped]}>
+                      ●
+                    </Text>
+                  </View>
+                  <Text style={s.dashboardMeta} numberOfLines={1}>
+                    {row.model} • {row.status} • {row.minutesAgo}m ago
+                  </Text>
+                  {!!row.lastPreview && (
+                    <Text style={s.dashboardPreview} numberOfLines={2}>
+                      {row.lastPreview}
+                    </Text>
+                  )}
+                </Pressable>
+              ))}
+              {dashboardAgents.length === 0 && <Text style={s.fileHint}>No agents for this filter.</Text>}
+            </ScrollView>
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setShowAgentDashboard(false)}>
+                <Text style={s.cancelText}>Close</Text>
               </Pressable>
             </View>
           </View>
@@ -2910,6 +3064,45 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     fontSize: 11,
     lineHeight: 15,
     fontFamily: typography.mono,
+  },
+  dashboardRow: {
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: 2,
+  },
+  dashboardRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  dashboardTitle: {
+    flex: 1,
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontFamily: typography.semibold,
+  },
+  dashboardStatusDot: {
+    color: '#2f9f5d',
+    fontSize: 14,
+    lineHeight: 16,
+    fontFamily: typography.semibold,
+  },
+  dashboardStatusDotStopped: {
+    color: colors.textMuted,
+  },
+  dashboardMeta: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: typography.mono,
+  },
+  dashboardPreview: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 15,
+    fontFamily: typography.medium,
   },
   modalTitle: {
     color: colors.textPrimary,

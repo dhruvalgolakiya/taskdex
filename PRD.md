@@ -166,18 +166,18 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 ### 4.3 Agent Dashboard
 
-- [ ] Grid/list of all agents across workspaces
-- [ ] Status dot, model, last message preview, time since last activity
-- [ ] Quick actions: tap to open thread, long-press for stop/restart
-- [ ] Filter: active only / stopped only / all
+- [x] Grid/list of all agents across workspaces
+- [x] Status dot, model, last message preview, time since last activity
+- [x] Quick actions: tap to open thread, long-press for stop/restart
+- [x] Filter: active only / stopped only / all
 
 ### 4.4 Agent Reconnect Improvements
 
-- [ ] Currently: stopped agents recreate on send — works but creates new threadId
-- [ ] Better: bridge saves agent state to disk, restores on restart
-- [ ] Bridge writes `~/.pylon/agents.json` on agent create/stop
-- [ ] On bridge start: read saved agents, reconnect where possible
-- [ ] Mobile detects restored agents via `list_agents` merge
+- [x] Currently: stopped agents recreate on send — works but creates new threadId
+- [x] Better: bridge saves agent state to disk, restores on restart
+- [x] Bridge writes `~/.pylon/agents.json` on agent create/stop
+- [x] On bridge start: read saved agents, reconnect where possible
+- [x] Mobile detects restored agents via `list_agents` merge
 
 ---
 

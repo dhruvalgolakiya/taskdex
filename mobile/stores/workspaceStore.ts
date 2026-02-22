@@ -45,6 +45,7 @@ interface WorkspaceStore {
     agents: { id: string; name: string; model: string; cwd: string; approvalPolicy?: string; systemPrompt?: string }[],
   ) => void;
   removeThreadFromWorkspace: (workspaceId: string, threadAgentId: string) => void;
+  replaceThreadAgentId: (workspaceId: string, oldThreadAgentId: string, newThreadAgentId: string) => void;
   cleanupMissingAgentThreads: (agentIds: string[]) => void;
 }
 
@@ -244,6 +245,21 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     set({ workspaces, activeWorkspaceId });
     persist(workspaces, activeWorkspaceId);
+  },
+
+  replaceThreadAgentId: (workspaceId, oldThreadAgentId, newThreadAgentId) => {
+    const workspaces = get().workspaces.map((workspace) => {
+      if (workspace.id !== workspaceId) return workspace;
+      const threads = workspace.threads.map((thread) =>
+        thread.id === oldThreadAgentId ? { ...thread, id: newThreadAgentId } : thread,
+      );
+      const activeThreadId = workspace.activeThreadId === oldThreadAgentId
+        ? newThreadAgentId
+        : workspace.activeThreadId;
+      return { ...workspace, threads, activeThreadId, updatedAt: Date.now() };
+    });
+    set({ workspaces });
+    persist(workspaces, get().activeWorkspaceId);
   },
 
   cleanupMissingAgentThreads: (agentIds) => {

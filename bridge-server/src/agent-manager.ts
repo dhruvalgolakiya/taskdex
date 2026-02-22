@@ -1,5 +1,8 @@
 import { spawn, ChildProcess } from 'child_process';
 import { v4 as uuid } from 'uuid';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   initializeRequest,
   initializedNotification,
@@ -43,6 +46,16 @@ const CYAN = '\x1b[36m';
 const RED = '\x1b[31m';
 const BG_BLUE = '\x1b[44m';
 const WHITE = '\x1b[37m';
+const AGENTS_STATE_PATH = path.join(os.homedir(), '.pylon', 'agents.json');
+
+interface PersistedAgent {
+  id: string;
+  name: string;
+  model: string;
+  cwd: string;
+  approvalPolicy?: string;
+  systemPrompt?: string;
+}
 
 export class AgentManager {
   private agents = new Map<string, AgentInfo>();
@@ -50,6 +63,7 @@ export class AgentManager {
 
   constructor(broadcast: BroadcastFn) {
     this.broadcast = broadcast;
+    void this.restoreAgentsFromDisk();
   }
 
   async createAgent(
@@ -58,8 +72,9 @@ export class AgentManager {
     cwd: string,
     approvalPolicy = 'never',
     systemPrompt = '',
+    agentId?: string,
   ): Promise<Omit<AgentInfo, 'process' | 'buffer' | 'pendingResponses'>> {
-    const id = uuid();
+    const id = agentId || uuid();
     console.log(`\n${BG_BLUE}${WHITE}${BOLD} NEW AGENT ${RESET} ${CYAN}${name}${RESET} (${DIM}${id.slice(0, 8)}${RESET})`);
     console.log(`  ${DIM}Model: ${model} | CWD: ${cwd}${RESET}`);
 
@@ -86,6 +101,7 @@ export class AgentManager {
     };
 
     this.agents.set(id, agent);
+    this.persistAgentsToDisk();
 
     // Handle stdout (JSON-RPC messages)
     proc.stdout!.on('data', (chunk: Buffer) => {
@@ -108,6 +124,8 @@ export class AgentManager {
     proc.on('exit', (code) => {
       console.log(`  ${YELLOW}[${name}] Process exited with code ${code}${RESET}`);
       agent.status = 'stopped';
+      this.agents.delete(id);
+      this.persistAgentsToDisk();
       this.broadcast(id, 'agent/stopped', { code });
       if (code !== 0 && code !== null) {
         sendPushNotification({
@@ -121,28 +139,35 @@ export class AgentManager {
       }
     });
 
-    // Initialize handshake
-    const initRes = await this.sendRequest(agent, initializeRequest('codex-mobile-bridge', '1.0.0'));
-    if (initRes.error) {
-      throw new Error(`Initialize failed: ${initRes.error.message}`);
+    try {
+      // Initialize handshake
+      const initRes = await this.sendRequest(agent, initializeRequest('codex-mobile-bridge', '1.0.0'));
+      if (initRes.error) {
+        throw new Error(`Initialize failed: ${initRes.error.message}`);
+      }
+      console.log(`  ${GREEN}[${name}] Initialized${RESET}`);
+
+      // Send initialized notification
+      this.write(agent, initializedNotification());
+
+      // Start thread
+      const threadRes = await this.sendRequest(agent, threadStartRequest(model, cwd, approvalPolicy));
+      if (threadRes.error) {
+        throw new Error(`Thread start failed: ${threadRes.error.message}`);
+      }
+      const threadData = threadRes.result as Record<string, unknown>;
+      const thread = threadData.thread as Record<string, unknown> | undefined;
+      agent.threadId = (thread?.id as string) || (threadData.threadId as string) || null;
+      agent.status = 'ready';
+      console.log(`  ${GREEN}[${name}] Thread started: ${agent.threadId?.slice(0, 8)}...${RESET}\n`);
+
+      return this.serialize(agent);
+    } catch (err) {
+      this.agents.delete(id);
+      this.persistAgentsToDisk();
+      try { agent.process.kill(); } catch {}
+      throw err;
     }
-    console.log(`  ${GREEN}[${name}] Initialized${RESET}`);
-
-    // Send initialized notification
-    this.write(agent, initializedNotification());
-
-    // Start thread
-    const threadRes = await this.sendRequest(agent, threadStartRequest(model, cwd, approvalPolicy));
-    if (threadRes.error) {
-      throw new Error(`Thread start failed: ${threadRes.error.message}`);
-    }
-    const threadData = threadRes.result as Record<string, unknown>;
-    const thread = threadData.thread as Record<string, unknown> | undefined;
-    agent.threadId = (thread?.id as string) || (threadData.threadId as string) || null;
-    agent.status = 'ready';
-    console.log(`  ${GREEN}[${name}] Thread started: ${agent.threadId?.slice(0, 8)}...${RESET}\n`);
-
-    return this.serialize(agent);
   }
 
   async sendMessage(agentId: string, text: string): Promise<void> {
@@ -184,6 +209,7 @@ export class AgentManager {
     agent.process.kill();
     agent.status = 'stopped';
     this.agents.delete(agentId);
+    this.persistAgentsToDisk();
   }
 
   updateModel(agentId: string, model: string): void {
@@ -191,6 +217,7 @@ export class AgentManager {
     if (!agent) throw new Error('Agent not found');
     agent.model = model;
     console.log(`  ${MAGENTA}[${agent.name}] Model updated to: ${model}${RESET}`);
+    this.persistAgentsToDisk();
   }
 
   updateConfig(agentId: string, config: { model?: string; approvalPolicy?: string; systemPrompt?: string }): void {
@@ -205,6 +232,7 @@ export class AgentManager {
     if (typeof config.systemPrompt === 'string') {
       agent.systemPrompt = config.systemPrompt;
     }
+    this.persistAgentsToDisk();
   }
 
   listAgents() {
@@ -233,6 +261,50 @@ export class AgentManager {
 
   private write(agent: AgentInfo, data: string) {
     agent.process.stdin!.write(data + '\n');
+  }
+
+  private persistAgentsToDisk() {
+    try {
+      fs.mkdirSync(path.dirname(AGENTS_STATE_PATH), { recursive: true });
+      const payload: PersistedAgent[] = Array.from(this.agents.values())
+        .map((agent) => ({
+          id: agent.id,
+          name: agent.name,
+          model: agent.model,
+          cwd: agent.cwd,
+          approvalPolicy: agent.approvalPolicy,
+          systemPrompt: agent.systemPrompt,
+        }));
+      fs.writeFileSync(AGENTS_STATE_PATH, JSON.stringify(payload, null, 2), 'utf8');
+    } catch (err) {
+      console.warn('[agents] Failed to persist agent state:', err);
+    }
+  }
+
+  private async restoreAgentsFromDisk() {
+    try {
+      if (!fs.existsSync(AGENTS_STATE_PATH)) return;
+      const raw = fs.readFileSync(AGENTS_STATE_PATH, 'utf8');
+      const parsed = JSON.parse(raw) as PersistedAgent[];
+      if (!Array.isArray(parsed) || parsed.length === 0) return;
+      console.log(`${DIM}[agents] Restoring ${parsed.length} saved agent(s) from ${AGENTS_STATE_PATH}${RESET}`);
+      for (const entry of parsed) {
+        try {
+          await this.createAgent(
+            entry.name,
+            entry.model,
+            entry.cwd,
+            entry.approvalPolicy || 'never',
+            entry.systemPrompt || '',
+            entry.id,
+          );
+        } catch (err) {
+          console.warn(`[agents] Failed to restore ${entry.name} (${entry.id}):`, err);
+        }
+      }
+    } catch (err) {
+      console.warn('[agents] Failed to restore saved agents:', err);
+    }
   }
 
   private sendRequest(agent: AgentInfo, request: string): Promise<JsonRpcResponse> {
