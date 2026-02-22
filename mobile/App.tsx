@@ -49,7 +49,7 @@ import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { setWidgetSummary, clearWidgetSummary } from 'taskdex-widget-bridge';
-import type { AgentMessage, QueuedMessage, AgentTemplate } from './types';
+import type { Agent, AgentMessage, QueuedMessage, AgentTemplate } from './types';
 import { api } from './convex/_generated/api';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
 import atomOneDark from 'react-syntax-highlighter/styles/hljs/atom-one-dark';
@@ -261,6 +261,7 @@ function WorkspaceScreen({
   const [showActivity, setShowActivity] = useState(false);
   const threadScrollState = useRef<Record<string, { offset: number; atBottom: boolean }>>({});
   const threadPagingState = useRef<Record<string, { oldestTimestamp: number | null; hasMore: boolean; loading: boolean }>>({});
+  const bootstrappedThreadIds = useRef<Set<string>>(new Set());
 
   const connectionStatus = useAgentStore((state) => state.connectionStatus);
   const agents = useAgentStore((state) => state.agents);
@@ -550,6 +551,99 @@ function WorkspaceScreen({
 
     setWorkspacesFromConvex(nextWorkspaces);
   }, [liveWorkspaceGraph, setWorkspacesFromConvex]);
+
+  useEffect(() => {
+    const threadSnapshots = workspaces.flatMap((workspace) =>
+      workspace.threads.map((thread) => ({
+        threadId: thread.id,
+        workspaceName: workspace.name,
+        model: workspace.model,
+        cwd: workspace.cwd,
+        approvalPolicy: workspace.approvalPolicy || 'never',
+        systemPrompt: workspace.systemPrompt || '',
+      })));
+    if (!threadSnapshots.length) return;
+
+    const currentAgents = useAgentStore.getState().agents;
+    const existingAgentsById = new Map(currentAgents.map((agent) => [agent.id, agent]));
+    const missingAgents: Agent[] = [];
+    const threadsToHydrate: string[] = [];
+
+    for (const thread of threadSnapshots) {
+      if (bootstrappedThreadIds.current.has(thread.threadId)) continue;
+      const existingAgent = existingAgentsById.get(thread.threadId);
+
+      if (!existingAgent) {
+        missingAgents.push({
+          id: thread.threadId,
+          name: thread.workspaceName,
+          model: thread.model,
+          cwd: thread.cwd,
+          approvalPolicy: thread.approvalPolicy,
+          systemPrompt: thread.systemPrompt,
+          status: 'stopped',
+          threadId: null,
+          currentTurnId: null,
+          messages: [],
+          queuedMessages: [],
+        });
+        threadsToHydrate.push(thread.threadId);
+        continue;
+      }
+
+      if (existingAgent.messages.length > 0) {
+        bootstrappedThreadIds.current.add(thread.threadId);
+        continue;
+      }
+
+      threadsToHydrate.push(thread.threadId);
+    }
+
+    if (missingAgents.length > 0) {
+      setAgents([...currentAgents, ...missingAgents]);
+    }
+
+    if (!threadsToHydrate.length) return;
+    for (const threadId of threadsToHydrate) {
+      bootstrappedThreadIds.current.add(threadId);
+    }
+
+    let cancelled = false;
+    const hydrateThreadMessages = async () => {
+      const results = await Promise.all(
+        threadsToHydrate.map(async (threadId) => ({
+          threadId,
+          result: await fetchThreadMessages(threadId, { limit: 50 }),
+        })),
+      );
+      if (cancelled) return;
+
+      const latestAgents = useAgentStore.getState().agents;
+      const updatedById = new Map(latestAgents.map((agent) => [agent.id, agent]));
+      let hasChanges = false;
+
+      for (const { threadId, result } of results) {
+        const target = updatedById.get(threadId);
+        if (!target || target.messages.length > 0) continue;
+        const fetchedMessages = result?.messages || [];
+        if (!fetchedMessages.length) continue;
+        updatedById.set(threadId, {
+          ...target,
+          messages: fetchedMessages,
+        });
+        hasChanges = true;
+      }
+
+      if (hasChanges) {
+        setAgents(Array.from(updatedById.values()));
+      }
+    };
+
+    void hydrateThreadMessages();
+    return () => {
+      cancelled = true;
+    };
+  }, [setAgents, workspaces]);
 
   useEffect(() => {
     if (!activeThreadId || !liveThreadMessages) return;

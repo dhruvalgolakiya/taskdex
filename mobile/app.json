@@ -22,7 +22,8 @@
         "NSMicrophoneUsageDescription": "Allow $(PRODUCT_NAME) to use the microphone for voice input."
       },
       "entitlements": {},
-      "bundleIdentifier": "com.dhruvalg.taskdex"
+      "bundleIdentifier": "com.dhruvalg.taskdex",
+      "appleTeamId": "V5FMGB2B26"
     },
     "android": {
       "adaptiveIcon": {
