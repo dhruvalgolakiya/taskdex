@@ -899,8 +899,9 @@ function WorkspaceScreen({
       setDirectoryResolvedCwd(normalizedPath ? `${baseCwd.replace(/\/$/, '')}/${normalizedPath}` : baseCwd);
       setDirectoryPath(responsePath);
       setDirectoryEntries(payload.entries || []);
-    } catch {
+    } catch (err: any) {
       setDirectoryEntries([]);
+      Alert.alert('Browse failed', err?.message || 'Could not list directories from bridge.');
     } finally {
       setLoadingDirectories(false);
     }
@@ -915,8 +916,9 @@ function WorkspaceScreen({
       } else {
         setRepoEntries([]);
       }
-    } catch {
+    } catch (err: any) {
       setRepoEntries([]);
+      Alert.alert('Repos failed', err?.message || 'Could not list repos from bridge.');
     } finally {
       setLoadingRepos(false);
     }
@@ -1012,7 +1014,6 @@ function WorkspaceScreen({
         bridgeAgentId: agent.id,
         createdAt,
       });
-      setShowCreateWorkspace(false);
       setNewWorkspaceName('');
       setNewWorkspaceSystemPrompt('');
       setNewWorkspaceApprovalPolicy('never');
@@ -1020,6 +1021,7 @@ function WorkspaceScreen({
     } catch (err: any) {
       Alert.alert('Error', toUserErrorMessage(err, 'Failed to create workspace'));
     } finally {
+      setShowCreateWorkspace(false);
       setCreatingWorkspace(false);
       createWorkspaceInFlight.current = false;
     }
@@ -1052,11 +1054,11 @@ function WorkspaceScreen({
         bridgeAgentId: agent.id,
         createdAt: Date.now(),
       });
-      setShowCreateThread(false);
       setNewThreadTitle('');
     } catch (err: any) {
       Alert.alert('Error', toUserErrorMessage(err, 'Failed to create thread'));
     } finally {
+      setShowCreateThread(false);
       setCreatingThread(false);
       createThreadInFlight.current = false;
     }
@@ -1278,10 +1280,10 @@ function WorkspaceScreen({
           createdAt: activeWorkspace.createdAt,
         });
       }
-      setShowEditModel(false);
     } catch (err: any) {
       Alert.alert('Error', toUserErrorMessage(err, 'Failed to update agent config'));
     } finally {
+      setShowEditModel(false);
       setSavingModel(false);
     }
   };
@@ -2204,7 +2206,7 @@ function WorkspaceScreen({
         </View>
       )}
 
-      <Modal visible={showOnboarding} transparent={true} animationType="fade">
+      <Modal visible={showOnboarding} transparent={true} animationType="fade" onRequestClose={() => setShowOnboarding(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Welcome to Pylon</Text>
@@ -2318,146 +2320,170 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showCreateWorkspace} transparent={true} animationType="fade">
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>New Agent</Text>
-            <Text style={s.label}>Template</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.templateRow}>
-              {availableTemplates.map((template) => {
-                const selected = selectedTemplateId === template.id;
-                return (
-                  <Pressable
-                    key={template.id}
-                    style={[s.templateChip, selected && s.templateChipActive]}
-                    onPress={() => applyTemplate(template)}
-                  >
-                    <Text style={s.templateChipText}>{template.icon} {template.name}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <View style={s.templateSaveRow}>
-              <TextInput
-                style={[s.input, s.templateSaveInput]}
-                value={customTemplateName}
-                onChangeText={setCustomTemplateName}
-                placeholder="Save current config as template"
-                placeholderTextColor={colors.textMuted}
-              />
-              <Pressable
-                style={[s.cancelBtn, (savingTemplate || !customTemplateName.trim()) && s.smallActionBtnDisabled]}
-                onPress={() => void handleSaveCustomTemplate()}
-                disabled={savingTemplate || !customTemplateName.trim()}
-              >
-                <Text style={s.cancelText}>{savingTemplate ? 'Saving...' : 'Save'}</Text>
+      <Modal visible={showCreateWorkspace} transparent={true} animationType="slide" onRequestClose={() => setShowCreateWorkspace(false)}>
+        <KeyboardAvoidingView style={s.createAgentOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={s.createAgentSheet}>
+            <View style={s.createAgentHeader}>
+              <Text style={s.modalTitle}>New Agent</Text>
+              <Pressable onPress={() => setShowCreateWorkspace(false)} style={s.createAgentClose}>
+                <Ionicons name="close" size={22} color={colors.textMuted} />
               </Pressable>
             </View>
-            <Text style={s.label}>Agent Name</Text>
-            <TextInput
-              style={s.input}
-              value={newWorkspaceName}
-              onChangeText={setNewWorkspaceName}
-              placeholder="Frontend Assistant"
-              placeholderTextColor={colors.textMuted}
-              autoFocus={true}
-            />
-            <Text style={s.label}>Model</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.modelOptionRow}>
-              {MODEL_OPTIONS.map((model) => {
-                const selected = newWorkspaceModel === model;
-                return (
-                  <Pressable
-                    key={model}
-                    style={[s.modelOptionChip, selected && s.modelOptionChipActive]}
-                    onPress={() => setNewWorkspaceModel(model)}
-                  >
-                    <Text style={[s.modelOptionText, selected && s.modelOptionTextActive]}>{model}</Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            <TextInput
-              style={s.input}
-              value={newWorkspaceModel}
-              onChangeText={setNewWorkspaceModel}
-              placeholder="gpt-5.1-codex"
-              placeholderTextColor={colors.textMuted}
-            />
-            <Text style={s.label}>Working Directory</Text>
-            <View style={s.cwdRow}>
+            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 20 }}>
+              <Text style={s.label}>Template</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.templateRow}>
+                {availableTemplates.map((template) => {
+                  const selected = selectedTemplateId === template.id;
+                  return (
+                    <Pressable
+                      key={template.id}
+                      style={[s.templateChip, selected && s.templateChipActive]}
+                      onPress={() => applyTemplate(template)}
+                    >
+                      <Text style={s.templateChipText}>{template.icon} {template.name}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+
+              <Text style={s.label}>Agent Name</Text>
               <TextInput
-                style={[s.input, s.cwdInput]}
+                style={s.input}
+                value={newWorkspaceName}
+                onChangeText={setNewWorkspaceName}
+                placeholder="Frontend Assistant"
+                placeholderTextColor={colors.textMuted}
+                autoFocus={true}
+              />
+
+              <Text style={s.label}>Model</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.modelOptionRow, { marginBottom: 8 }]}>
+                {MODEL_OPTIONS.map((model) => {
+                  const selected = newWorkspaceModel === model;
+                  return (
+                    <Pressable
+                      key={model}
+                      style={[s.modelOptionChip, selected && s.modelOptionChipActive]}
+                      onPress={() => setNewWorkspaceModel(model)}
+                    >
+                      <Text style={[s.modelOptionText, selected && s.modelOptionTextActive]}>{model}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              <TextInput
+                style={s.input}
+                value={newWorkspaceModel}
+                onChangeText={setNewWorkspaceModel}
+                placeholder="or type custom model"
+                placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+
+              <Text style={s.label}>Working Directory</Text>
+              <TextInput
+                style={[s.input, { marginBottom: 6 }]}
                 value={newWorkspaceCwd}
                 onChangeText={setNewWorkspaceCwd}
-                placeholder="~/projects"
+                placeholder="/path/to/project"
                 placeholderTextColor={colors.textMuted}
+                autoCapitalize="none"
+                autoCorrect={false}
               />
-              <Pressable
-                style={s.cancelBtn}
-                onPress={() => {
-                  setShowDirectoryPicker(true);
-                  setDirectoryResolvedCwd(newWorkspaceCwd.trim() || '.');
-                  void loadDirectoryOptions('.');
-                }}
-              >
-                <Text style={s.cancelText}>Browse</Text>
-              </Pressable>
-              <Pressable
-                style={s.cancelBtn}
-                onPress={() => {
-                  setShowRepoManager(true);
-                  void refreshRepoEntries();
-                }}
-              >
-                <Text style={s.cancelText}>Repos</Text>
-              </Pressable>
-            </View>
-            <Text style={s.label}>Approval Policy</Text>
-            <View style={s.themeModeRow}>
-              <Pressable
-                style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipActive]}
-                onPress={() => setNewWorkspaceApprovalPolicy('never')}
-              >
-                <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipTextActive]}>
-                  Auto-approve
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipActive]}
-                onPress={() => setNewWorkspaceApprovalPolicy('on-request')}
-              >
-                <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipTextActive]}>
-                  Ask first
-                </Text>
-              </Pressable>
-            </View>
-            <Text style={s.label}>System Prompt</Text>
-            <TextInput
-              style={[s.input, s.systemPromptInput]}
-              value={newWorkspaceSystemPrompt}
-              onChangeText={setNewWorkspaceSystemPrompt}
-              placeholder="Instructions prepended to every turn"
-              placeholderTextColor={colors.textMuted}
-              multiline
-            />
-            <View style={s.modalActions}>
+              {connectionStatus === 'connected' ? (
+                <View style={s.cwdActions}>
+                  <Pressable
+                    style={s.cwdActionBtn}
+                    onPress={() => {
+                      setShowDirectoryPicker(true);
+                      setDirectoryResolvedCwd(newWorkspaceCwd.trim() || '.');
+                      void loadDirectoryOptions('.');
+                    }}
+                  >
+                    <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
+                    <Text style={s.cwdActionText}>Browse</Text>
+                  </Pressable>
+                  <Pressable
+                    style={s.cwdActionBtn}
+                    onPress={() => {
+                      setShowRepoManager(true);
+                      void refreshRepoEntries();
+                    }}
+                  >
+                    <Ionicons name="git-branch-outline" size={16} color={colors.accent} />
+                    <Text style={s.cwdActionText}>Repos</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Text style={s.cwdHint}>Connect to bridge to browse directories</Text>
+              )}
+
+              <Text style={s.label}>Approval Policy</Text>
+              <View style={s.themeModeRow}>
+                <Pressable
+                  style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipActive]}
+                  onPress={() => setNewWorkspaceApprovalPolicy('never')}
+                >
+                  <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipTextActive]}>
+                    Auto-approve
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipActive]}
+                  onPress={() => setNewWorkspaceApprovalPolicy('on-request')}
+                >
+                  <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipTextActive]}>
+                    Ask first
+                  </Text>
+                </Pressable>
+              </View>
+
+              <Text style={s.label}>System Prompt</Text>
+              <TextInput
+                style={[s.input, s.systemPromptInput]}
+                value={newWorkspaceSystemPrompt}
+                onChangeText={setNewWorkspaceSystemPrompt}
+                placeholder="Instructions prepended to every turn"
+                placeholderTextColor={colors.textMuted}
+                multiline
+              />
+
+              <View style={s.templateSaveRow}>
+                <TextInput
+                  style={[s.input, s.templateSaveInput, { marginBottom: 0 }]}
+                  value={customTemplateName}
+                  onChangeText={setCustomTemplateName}
+                  placeholder="Save as template..."
+                  placeholderTextColor={colors.textMuted}
+                />
+                <Pressable
+                  style={[s.cwdActionBtn, (savingTemplate || !customTemplateName.trim()) && s.smallActionBtnDisabled]}
+                  onPress={() => void handleSaveCustomTemplate()}
+                  disabled={savingTemplate || !customTemplateName.trim()}
+                >
+                  <Text style={s.cwdActionText}>{savingTemplate ? 'Saving...' : 'Save'}</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
+
+            <View style={s.createAgentFooter}>
               <Pressable style={s.cancelBtn} onPress={() => setShowCreateWorkspace(false)}>
                 <Text style={s.cancelText}>Cancel</Text>
               </Pressable>
               <Pressable
-                style={[s.primaryBtn, creatingWorkspace && { opacity: 0.55 }]}
+                style={[s.primaryBtn, { flex: 1 }, (creatingWorkspace || !newWorkspaceName.trim()) && { opacity: 0.55 }]}
                 onPress={handleCreateWorkspace}
                 disabled={creatingWorkspace || !newWorkspaceName.trim()}
               >
-                <Text style={s.primaryText}>{creatingWorkspace ? 'Creating...' : 'Create'}</Text>
+                <Text style={[s.primaryText, { textAlign: 'center' }]}>{creatingWorkspace ? 'Creating...' : 'Create Agent'}</Text>
               </Pressable>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showDirectoryPicker} transparent={true} animationType="fade">
+      <Modal visible={showDirectoryPicker} transparent={true} animationType="fade" presentationStyle="overFullScreen" onRequestClose={() => setShowDirectoryPicker(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>Choose Directory</Text>
@@ -2506,7 +2532,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showRepoManager} transparent={true} animationType="fade">
+      <Modal visible={showRepoManager} transparent={true} animationType="fade" presentationStyle="overFullScreen" onRequestClose={() => setShowRepoManager(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>Repositories</Text>
@@ -2563,7 +2589,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showCreateThread} transparent={true} animationType="fade">
+      <Modal visible={showCreateThread} transparent={true} animationType="fade" onRequestClose={() => setShowCreateThread(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>New Thread</Text>
@@ -2592,7 +2618,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showFileBrowser} transparent={true} animationType="fade">
+      <Modal visible={showFileBrowser} transparent={true} animationType="fade" onRequestClose={() => setShowFileBrowser(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Files</Text>
@@ -2669,7 +2695,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showGitModal} transparent={true} animationType="fade">
+      <Modal visible={showGitModal} transparent={true} animationType="fade" onRequestClose={() => setShowGitModal(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Git</Text>
@@ -2714,7 +2740,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showAgentDashboard} transparent={true} animationType="fade">
+      <Modal visible={showAgentDashboard} transparent={true} animationType="fade" onRequestClose={() => setShowAgentDashboard(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Agent Dashboard</Text>
@@ -2771,7 +2797,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showUsageModal} transparent={true} animationType="fade">
+      <Modal visible={showUsageModal} transparent={true} animationType="fade" onRequestClose={() => setShowUsageModal(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Usage Analytics</Text>
@@ -2832,7 +2858,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showNotificationsModal} transparent={true} animationType="fade">
+      <Modal visible={showNotificationsModal} transparent={true} animationType="fade" onRequestClose={() => setShowNotificationsModal(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Notifications</Text>
@@ -2897,7 +2923,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showQrScanner} transparent={true} animationType="fade">
+      <Modal visible={showQrScanner} transparent={true} animationType="fade" onRequestClose={() => setShowQrScanner(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
             <Text style={s.modalTitle}>Scan Bridge QR</Text>
@@ -2924,7 +2950,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showMoreMenu} transparent={true} animationType="fade">
+      <Modal visible={showMoreMenu} transparent={true} animationType="fade" onRequestClose={() => setShowMoreMenu(false)}>
         <Pressable style={s.modalOverlay} onPress={() => setShowMoreMenu(false)}>
           <Pressable style={s.moreMenuSheet} onPress={() => {}}>
             <View style={s.moreMenuHandle} />
@@ -2950,7 +2976,7 @@ function WorkspaceScreen({
         </Pressable>
       </Modal>
 
-      <Modal visible={showSettings} transparent={true} animationType="fade">
+      <Modal visible={showSettings} transparent={true} animationType="fade" onRequestClose={() => setShowSettings(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>Settings</Text>
@@ -3031,7 +3057,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showEditModel} transparent={true} animationType="fade">
+      <Modal visible={showEditModel} transparent={true} animationType="fade" onRequestClose={() => setShowEditModel(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>Edit Agent</Text>
@@ -3047,27 +3073,30 @@ function WorkspaceScreen({
               autoFocus={true}
             />
             <Text style={s.label}>Working Directory</Text>
-            <View style={s.cwdRow}>
-              <TextInput
-                style={[s.input, s.cwdInput]}
-                value={cwdInput}
-                onChangeText={setCwdInput}
-                placeholder="~/projects"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              <Pressable
-                style={s.cancelBtn}
-                onPress={() => {
-                  setShowDirectoryPicker(true);
-                  setDirectoryResolvedCwd(cwdInput.trim() || '.');
-                  void loadDirectoryOptions('.');
-                }}
-              >
-                <Text style={s.cancelText}>Browse</Text>
-              </Pressable>
-            </View>
+            <TextInput
+              style={s.input}
+              value={cwdInput}
+              onChangeText={setCwdInput}
+              placeholder="/path/to/project"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {connectionStatus === 'connected' && (
+              <View style={s.cwdActions}>
+                <Pressable
+                  style={s.cwdActionBtn}
+                  onPress={() => {
+                    setShowDirectoryPicker(true);
+                    setDirectoryResolvedCwd(cwdInput.trim() || '.');
+                    void loadDirectoryOptions('.');
+                  }}
+                >
+                  <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
+                  <Text style={s.cwdActionText}>Browse</Text>
+                </Pressable>
+              </View>
+            )}
             <View style={s.modalActions}>
               <Pressable style={s.cancelBtn} onPress={() => setShowEditModel(false)} disabled={savingModel}>
                 <Text style={s.cancelText}>Cancel</Text>
@@ -3084,7 +3113,7 @@ function WorkspaceScreen({
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={!!editingQueueItem} transparent={true} animationType="fade">
+      <Modal visible={!!editingQueueItem} transparent={true} animationType="fade" onRequestClose={() => { setEditingQueueItem(null); setEditingQueueText(''); }}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>Edit Queued Message</Text>
@@ -3757,6 +3786,68 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     justifyContent: 'center',
     padding: 16,
     backgroundColor: 'rgba(15, 24, 18, 0.28)',
+  },
+  createAgentOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 24, 18, 0.28)',
+  },
+  createAgentSheet: {
+    flex: 1,
+    marginTop: 60,
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: colors.border,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+  },
+  createAgentHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  createAgentClose: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createAgentFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.border,
+  },
+  cwdActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 14,
+  },
+  cwdActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  cwdActionText: {
+    color: colors.accent,
+    fontSize: 13,
+    fontFamily: typography.semibold,
+  },
+  cwdHint: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontFamily: typography.regular,
+    marginBottom: 14,
   },
   modal: {
     backgroundColor: colors.surface,
