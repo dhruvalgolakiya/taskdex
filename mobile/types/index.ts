@@ -22,6 +22,8 @@ export interface Agent {
   name: string;
   model: string;
   cwd: string;
+  approvalPolicy?: 'never' | 'on-request' | string;
+  systemPrompt?: string;
   status: AgentStatus;
   activityLabel?: string;
   queuedMessages?: QueuedMessage[];
@@ -41,10 +43,24 @@ export interface AgentWorkspace {
   name: string;
   model: string;
   cwd: string;
+  approvalPolicy?: 'never' | 'on-request' | string;
+  systemPrompt?: string;
+  templateId?: string;
+  templateIcon?: string;
   threads: AgentThread[];
   activeThreadId: string | null;
   createdAt: number;
   updatedAt: number;
+}
+
+export interface AgentTemplate {
+  id: string;
+  name: string;
+  model: string;
+  promptPrefix: string;
+  icon: string;
+  builtIn?: boolean;
+  createdAt: number;
 }
 
 // Messages sent TO the bridge server

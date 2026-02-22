@@ -1,6 +1,6 @@
 import { ConvexReactClient } from 'convex/react';
 import { api } from '../convex/_generated/api';
-import type { AgentMessage, AgentWorkspace, AgentThread } from '../types';
+import type { AgentMessage, AgentWorkspace, AgentThread, AgentTemplate } from '../types';
 
 export const convexUrl = process.env.EXPO_PUBLIC_CONVEX_URL || 'http://127.0.0.1:3210';
 export const convexClient = new ConvexReactClient(convexUrl);
@@ -65,6 +65,10 @@ interface WorkspaceRecordInput {
   name: string;
   model: string;
   cwd: string;
+  approvalPolicy?: string;
+  systemPrompt?: string;
+  templateId?: string;
+  templateIcon?: string;
   createdAt: number;
 }
 
@@ -84,6 +88,16 @@ interface BridgeSettingInput {
 interface BridgeSettingsResult {
   bridgeUrl: string;
   apiKey: string;
+}
+
+interface TemplateRecordInput {
+  id: string;
+  name: string;
+  model: string;
+  promptPrefix: string;
+  icon: string;
+  builtIn?: boolean;
+  createdAt: number;
 }
 
 export async function fetchThreadMessages(
@@ -134,6 +148,39 @@ export async function persistThreadRecord(input: ThreadRecordInput): Promise<voi
   }
 }
 
+export async function persistTemplateRecord(input: TemplateRecordInput): Promise<void> {
+  try {
+    await convexClient.mutation(api.persistence.saveTemplate, input);
+  } catch {
+    // Best-effort persistence; local state remains source of truth if network fails.
+  }
+}
+
+export async function deleteTemplateRecord(id: string): Promise<void> {
+  try {
+    await convexClient.mutation(api.persistence.deleteTemplate, { id });
+  } catch {
+    // Best-effort delete.
+  }
+}
+
+export async function fetchTemplates(): Promise<AgentTemplate[] | null> {
+  try {
+    const rows = await convexClient.query(api.persistence.getTemplates, {});
+    return rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+      model: row.model,
+      promptPrefix: row.promptPrefix,
+      icon: row.icon,
+      builtIn: row.builtIn,
+      createdAt: row.createdAt,
+    }));
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchWorkspaceGraph(): Promise<AgentWorkspace[] | null> {
   if (!convexClient) return null;
   try {
@@ -152,6 +199,10 @@ export async function fetchWorkspaceGraph(): Promise<AgentWorkspace[] | null> {
           name: workspace.name,
           model: workspace.model,
           cwd: workspace.cwd,
+          approvalPolicy: workspace.approvalPolicy,
+          systemPrompt: workspace.systemPrompt,
+          templateId: workspace.templateId,
+          templateIcon: workspace.templateIcon,
           threads,
           activeThreadId: threads[0]?.id || null,
           createdAt: workspace.createdAt,

@@ -150,19 +150,19 @@ Right now anyone who knows your bridge IP:port has full control. Need basic auth
 
 ### 4.1 Agent Templates
 
-- [ ] Template = { name, model, promptPrefix, icon }
-- [ ] Built-in: "Bug Fixer", "Code Reviewer", "Test Writer"
-- [ ] Template selector in "New Agent" modal
-- [ ] Custom templates saved to Convex
-- [ ] Template applies: pre-fills model, prepends prompt to first message
+- [x] Template = { name, model, promptPrefix, icon }
+- [x] Built-in: "Bug Fixer", "Code Reviewer", "Test Writer"
+- [x] Template selector in "New Agent" modal
+- [x] Custom templates saved to Convex
+- [x] Template applies: pre-fills model, prepends prompt to first message
 
 ### 4.2 Agent Configuration
 
-- [ ] Model selector dropdown (not just text input)
-- [ ] Working directory browser on bridge machine (new action: `list_directories`)
-- [ ] Approval policy picker: auto-approve vs ask (update `protocol.ts` threadStartRequest)
-- [ ] System prompt / instructions field (prepended to every turn)
-- [ ] Save config per workspace in Convex
+- [x] Model selector dropdown (not just text input)
+- [x] Working directory browser on bridge machine (new action: `list_directories`)
+- [x] Approval policy picker: auto-approve vs ask (update `protocol.ts` threadStartRequest)
+- [x] System prompt / instructions field (prepended to every turn)
+- [x] Save config per workspace in Convex
 
 ### 4.3 Agent Dashboard
 

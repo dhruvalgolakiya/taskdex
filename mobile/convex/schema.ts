@@ -29,6 +29,10 @@ export default defineSchema({
     name: v.string(),
     model: v.string(),
     cwd: v.string(),
+    approvalPolicy: v.optional(v.string()),
+    systemPrompt: v.optional(v.string()),
+    templateId: v.optional(v.string()),
+    templateIcon: v.optional(v.string()),
     createdAt: v.number(),
   })
     .index("by_workspace_id", ["id"])
@@ -45,6 +49,19 @@ export default defineSchema({
     .index("by_thread_id", ["id"])
     .index("by_workspaceId", ["workspaceId"])
     .index("by_bridgeAgentId", ["bridgeAgentId"]),
+
+  templates: defineTable({
+    id: v.string(),
+    name: v.string(),
+    model: v.string(),
+    promptPrefix: v.string(),
+    icon: v.string(),
+    builtIn: v.optional(v.boolean()),
+    createdAt: v.number(),
+  })
+    .index("by_template_id", ["id"])
+    .index("by_createdAt", ["createdAt"])
+    .index("by_builtIn", ["builtIn"]),
 
   messages: defineTable({
     id: v.string(),

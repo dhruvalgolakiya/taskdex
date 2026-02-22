@@ -200,6 +200,8 @@ async function reconcileConvexWithBridgeAgents(bridgeAgents: Agent[]) {
         name: agent.name,
         model: agent.model,
         cwd: agent.cwd,
+        approvalPolicy: agent.approvalPolicy || 'never',
+        systemPrompt: agent.systemPrompt || '',
         firstThreadAgentId: agent.id,
         firstThreadTitle: 'Thread 1',
         makeActive: false,
@@ -210,6 +212,8 @@ async function reconcileConvexWithBridgeAgents(bridgeAgents: Agent[]) {
         name: agent.name,
         model: agent.model,
         cwd: agent.cwd,
+        approvalPolicy: agent.approvalPolicy || 'never',
+        systemPrompt: agent.systemPrompt || '',
         createdAt,
       });
       await persistThreadRecord({
@@ -245,6 +249,10 @@ async function reconcileConvexWithBridgeAgents(bridgeAgents: Agent[]) {
       name: workspace.name,
       model: workspace.model,
       cwd: workspace.cwd,
+      approvalPolicy: workspace.approvalPolicy,
+      systemPrompt: workspace.systemPrompt,
+      templateId: workspace.templateId,
+      templateIcon: workspace.templateIcon,
       createdAt: workspace.createdAt,
     });
   }
@@ -443,6 +451,8 @@ export async function sendMessageToAgent(agentId: string, text: string) {
         name: agent.name,
         model: agent.model,
         cwd: agent.cwd,
+        approvalPolicy: agent.approvalPolicy,
+        systemPrompt: agent.systemPrompt,
       });
       if (res.type === 'response' && res.data) {
         const newAgent = res.data as Agent;
@@ -480,8 +490,19 @@ export function useWebSocket() {
   );
 
   const createAgent = useCallback(
-    async (name: string, model: string, cwd: string) => {
-      const res = await send('create_agent', { name, model, cwd });
+    async (
+      name: string,
+      model: string,
+      cwd: string,
+      config?: { approvalPolicy?: string; systemPrompt?: string },
+    ) => {
+      const res = await send('create_agent', {
+        name,
+        model,
+        cwd,
+        approvalPolicy: config?.approvalPolicy,
+        systemPrompt: config?.systemPrompt,
+      });
       if (res.type === 'response' && res.data) {
         useAgentStore.getState().addAgent(res.data as Agent);
         return res.data as Agent;
@@ -512,6 +533,8 @@ export function useWebSocket() {
             name: agent.name,
             model: agent.model,
             cwd: agent.cwd,
+            approvalPolicy: agent.approvalPolicy,
+            systemPrompt: agent.systemPrompt,
           });
           if (res.type === 'response' && res.data) {
             const newAgent = res.data as Agent;
@@ -556,6 +579,16 @@ export function useWebSocket() {
     [send],
   );
 
+  const updateAgentConfig = useCallback(
+    async (agentId: string, config: { model?: string; approvalPolicy?: string; systemPrompt?: string }) => {
+      await send('update_agent_config', { agentId, ...config });
+      if (config.model?.trim()) {
+        useAgentStore.getState().updateAgentModel(agentId, config.model.trim());
+      }
+    },
+    [send],
+  );
+
   const interruptAgent = useCallback(
     async (agentId: string) => {
       await send('interrupt', { agentId });
@@ -563,5 +596,5 @@ export function useWebSocket() {
     [send],
   );
 
-  return { send, createAgent, sendMessage, stopAgent, interruptAgent, updateAgentModel };
+  return { send, createAgent, sendMessage, stopAgent, interruptAgent, updateAgentModel, updateAgentConfig };
 }

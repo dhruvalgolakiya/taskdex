@@ -92,15 +92,17 @@ The bridge accepts JSON messages over WebSocket:
 
 | Action | Params | Description |
 |---|---|---|
-| `create_agent` | `{ name, model, cwd }` | Spawn a new Codex agent |
+| `create_agent` | `{ name, model, cwd, approvalPolicy?, systemPrompt? }` | Spawn a new Codex agent |
 | `list_agents` | — | List all running agents |
 | `send_message` | `{ agentId, text }` | Send a message to an agent |
 | `interrupt` | `{ agentId }` | Interrupt an agent's current turn |
 | `stop_agent` | `{ agentId }` | Stop and kill an agent process |
 | `update_agent_model` | `{ agentId, model }` | Change an agent's model |
+| `update_agent_config` | `{ agentId, model?, approvalPolicy?, systemPrompt? }` | Update agent runtime config |
 | `get_agent` | `{ agentId }` | Get details for a specific agent |
 | `register_push_token` | `{ token }` | Register an Expo push token for notifications |
 | `list_files` | `{ cwd, path }` | List files/directories in workspace |
+| `list_directories` | `{ cwd, path }` | List only directories for cwd browsing |
 | `read_file` | `{ cwd, path }` | Read file contents |
 | `git_status` | `{ cwd }` | Get git branch/dirty state |
 | `git_log` | `{ cwd, limit? }` | Get commit history |

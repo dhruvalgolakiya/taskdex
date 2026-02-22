@@ -83,6 +83,10 @@ export const saveWorkspace = mutation({
     name: v.string(),
     model: v.string(),
     cwd: v.string(),
+    approvalPolicy: v.optional(v.string()),
+    systemPrompt: v.optional(v.string()),
+    templateId: v.optional(v.string()),
+    templateIcon: v.optional(v.string()),
     createdAt: v.number(),
   },
   handler: async (ctx, args) => {
@@ -97,6 +101,44 @@ export const saveWorkspace = mutation({
     }
 
     return await ctx.db.insert("workspaces", args);
+  },
+});
+
+export const saveTemplate = mutation({
+  args: {
+    id: v.string(),
+    name: v.string(),
+    model: v.string(),
+    promptPrefix: v.string(),
+    icon: v.string(),
+    builtIn: v.optional(v.boolean()),
+    createdAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("templates")
+      .withIndex("by_template_id", (q) => q.eq("id", args.id))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, args);
+      return existing._id;
+    }
+    return await ctx.db.insert("templates", args);
+  },
+});
+
+export const deleteTemplate = mutation({
+  args: {
+    id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("templates")
+      .withIndex("by_template_id", (q) => q.eq("id", args.id))
+      .unique();
+    if (!existing) return { ok: false };
+    await ctx.db.delete(existing._id);
+    return { ok: true };
   },
 });
 
@@ -198,6 +240,13 @@ export const getSettings = query({
       .query("settings")
       .withIndex("by_setting_id", (q) => q.eq("id", args.id))
       .unique();
+  },
+});
+
+export const getTemplates = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("templates").withIndex("by_createdAt").collect();
   },
 });
 

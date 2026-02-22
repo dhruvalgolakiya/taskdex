@@ -41,7 +41,7 @@ import { ChatBubble } from './components/ChatBubble';
 import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
-import type { AgentMessage, QueuedMessage } from './types';
+import type { AgentMessage, QueuedMessage, AgentTemplate } from './types';
 import { api } from './convex/_generated/api';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
 import { atomOneDark, atomOneLight } from 'react-syntax-highlighter/styles/hljs';
@@ -51,6 +51,7 @@ import {
   deletePersistedMessage,
   persistWorkspaceRecord,
   persistThreadRecord,
+  persistTemplateRecord,
 } from './lib/convexClient';
 import {
   getConnectionColors,
@@ -111,6 +112,38 @@ function guessLanguageFromPath(filePath: string): string {
   if (lower.endsWith('.html')) return 'html';
   return 'text';
 }
+
+const BUILT_IN_TEMPLATES: AgentTemplate[] = [
+  {
+    id: 'builtin_bug_fixer',
+    name: 'Bug Fixer',
+    model: 'gpt-5.1-codex',
+    promptPrefix: 'Focus on root-cause debugging, minimal safe fixes, and regression checks.',
+    icon: 'bug',
+    builtIn: true,
+    createdAt: 0,
+  },
+  {
+    id: 'builtin_code_reviewer',
+    name: 'Code Reviewer',
+    model: 'gpt-5.1-codex',
+    promptPrefix: 'Prioritize correctness risks, edge cases, and missing tests with actionable fixes.',
+    icon: 'review',
+    builtIn: true,
+    createdAt: 0,
+  },
+  {
+    id: 'builtin_test_writer',
+    name: 'Test Writer',
+    model: 'gpt-5.1-codex',
+    promptPrefix: 'Write focused tests for behavior, edge cases, and failures before implementation changes.',
+    icon: 'test',
+    builtIn: true,
+    createdAt: 0,
+  },
+];
+
+const MODEL_OPTIONS = ['gpt-5.1-codex', 'gpt-5-codex', 'gpt-4.1'];
 
 function messageIdentity(message: AgentMessage): string {
   if (message._itemId) return `item:${message._itemId}`;
@@ -202,6 +235,16 @@ function WorkspaceScreen({
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [newWorkspaceModel, setNewWorkspaceModel] = useState('gpt-5.1-codex');
   const [newWorkspaceCwd, setNewWorkspaceCwd] = useState('/Users/apple/Work/DhruvalPersonal');
+  const [newWorkspaceApprovalPolicy, setNewWorkspaceApprovalPolicy] = useState<'never' | 'on-request'>('never');
+  const [newWorkspaceSystemPrompt, setNewWorkspaceSystemPrompt] = useState('');
+  const [selectedTemplateId, setSelectedTemplateId] = useState(BUILT_IN_TEMPLATES[0].id);
+  const [customTemplateName, setCustomTemplateName] = useState('');
+  const [savingTemplate, setSavingTemplate] = useState(false);
+  const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
+  const [directoryEntries, setDirectoryEntries] = useState<Array<{ name: string; path: string }>>([]);
+  const [directoryPath, setDirectoryPath] = useState('.');
+  const [directoryResolvedCwd, setDirectoryResolvedCwd] = useState('');
+  const [loadingDirectories, setLoadingDirectories] = useState(false);
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const createWorkspaceInFlight = useRef(false);
 
@@ -265,6 +308,7 @@ function WorkspaceScreen({
     api.persistence.getMessages,
     activeThreadId ? { threadId: activeThreadId, limit: 50 } : 'skip',
   );
+  const savedTemplates = useQuery(api.persistence.getTemplates, {}) || [];
   const globalSearchResults = useQuery(
     api.persistence.searchMessages,
     searchScope === 'all' && searchQuery.trim().length >= 2
@@ -281,6 +325,20 @@ function WorkspaceScreen({
   const connectionColor = connectionColors[connectionStatus] || colors.textMuted;
   const statusColor = activeAgent ? statusColors[activeAgent.status] || colors.textMuted : colors.textMuted;
   const bottomInset = Math.min(Math.max(insets.bottom, 10), 18);
+  const availableTemplates = useMemo(() => {
+    const custom = savedTemplates
+      .filter((template) => !template.builtIn)
+      .map((template) => ({
+        id: template.id,
+        name: template.name,
+        model: template.model,
+        promptPrefix: template.promptPrefix,
+        icon: template.icon,
+        builtIn: false,
+        createdAt: template.createdAt,
+      }));
+    return [...BUILT_IN_TEMPLATES, ...custom];
+  }, [savedTemplates]);
 
   useEffect(() => {
     const agents = useAgentStore.getState().agents.map((agent) => ({
@@ -288,6 +346,8 @@ function WorkspaceScreen({
       name: agent.name,
       model: agent.model,
       cwd: agent.cwd,
+      approvalPolicy: agent.approvalPolicy,
+      systemPrompt: agent.systemPrompt,
     }));
     // Skip if a create is in flight — handleCreateWorkspace will call createWorkspace itself
     if (!createWorkspaceInFlight.current) {
@@ -330,6 +390,10 @@ function WorkspaceScreen({
         name: workspace.name,
         model: workspace.model,
         cwd: workspace.cwd,
+        approvalPolicy: workspace.approvalPolicy,
+        systemPrompt: workspace.systemPrompt,
+        templateId: workspace.templateId,
+        templateIcon: workspace.templateIcon,
         threads,
         activeThreadId,
         createdAt: workspace.createdAt,
@@ -640,21 +704,82 @@ function WorkspaceScreen({
     previousStatusesRef.current = nextStatuses;
   }, [agents, workspaces]);
 
+  const applyTemplate = useCallback((template: AgentTemplate) => {
+    setSelectedTemplateId(template.id);
+    setNewWorkspaceModel(template.model);
+    setNewWorkspaceSystemPrompt(template.promptPrefix || '');
+    if (!newWorkspaceName.trim()) {
+      setNewWorkspaceName(template.name);
+    }
+  }, [newWorkspaceName]);
+
+  const loadDirectoryOptions = useCallback(async (targetPath: string) => {
+    setLoadingDirectories(true);
+    try {
+      const res = await sendRequest('list_directories', {
+        cwd: newWorkspaceCwd.trim() || '.',
+        path: targetPath,
+      });
+      if (res.type !== 'response' || !res.data) {
+        throw new Error(res.error || 'Failed to list directories');
+      }
+      const payload = res.data as { entries?: Array<{ name: string; path: string }>; cwd?: string; path?: string };
+      const responsePath = payload.path || targetPath || '.';
+      const baseCwd = payload.cwd || newWorkspaceCwd.trim() || '.';
+      const normalizedPath = responsePath === '.' ? '' : responsePath.replace(/^\.\//, '');
+      setDirectoryResolvedCwd(normalizedPath ? `${baseCwd.replace(/\/$/, '')}/${normalizedPath}` : baseCwd);
+      setDirectoryPath(responsePath);
+      setDirectoryEntries(payload.entries || []);
+    } catch {
+      setDirectoryEntries([]);
+    } finally {
+      setLoadingDirectories(false);
+    }
+  }, [newWorkspaceCwd]);
+
+  const handleSaveCustomTemplate = useCallback(async () => {
+    const name = customTemplateName.trim();
+    if (!name) return;
+    setSavingTemplate(true);
+    try {
+      await persistTemplateRecord({
+        id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        name,
+        model: newWorkspaceModel.trim() || 'gpt-5.1-codex',
+        promptPrefix: newWorkspaceSystemPrompt.trim(),
+        icon: 'custom',
+        builtIn: false,
+        createdAt: Date.now(),
+      });
+      setCustomTemplateName('');
+    } finally {
+      setSavingTemplate(false);
+    }
+  }, [customTemplateName, newWorkspaceModel, newWorkspaceSystemPrompt]);
+
   const handleCreateWorkspace = async () => {
     if (createWorkspaceInFlight.current || creatingWorkspace) return;
     const name = newWorkspaceName.trim();
     const model = newWorkspaceModel.trim() || 'gpt-5.1-codex';
     const cwd = newWorkspaceCwd.trim() || '/Users/apple/Work/DhruvalPersonal';
+    const template = availableTemplates.find((entry) => entry.id === selectedTemplateId);
     if (!name) return;
 
     createWorkspaceInFlight.current = true;
     setCreatingWorkspace(true);
     try {
-      const agent = await createAgent(name, model, cwd);
+      const agent = await createAgent(name, model, cwd, {
+        approvalPolicy: newWorkspaceApprovalPolicy,
+        systemPrompt: newWorkspaceSystemPrompt.trim(),
+      });
       const workspaceId = createWorkspace({
         name,
         model,
         cwd,
+        approvalPolicy: newWorkspaceApprovalPolicy,
+        systemPrompt: newWorkspaceSystemPrompt.trim(),
+        templateId: template?.id,
+        templateIcon: template?.icon,
         firstThreadAgentId: agent.id,
         firstThreadTitle: 'Thread 1',
       });
@@ -665,6 +790,10 @@ function WorkspaceScreen({
         name,
         model,
         cwd,
+        approvalPolicy: newWorkspaceApprovalPolicy,
+        systemPrompt: newWorkspaceSystemPrompt.trim(),
+        templateId: template?.id,
+        templateIcon: template?.icon,
         createdAt,
       });
       await persistThreadRecord({
@@ -676,6 +805,9 @@ function WorkspaceScreen({
       });
       setShowCreateWorkspace(false);
       setNewWorkspaceName('');
+      setNewWorkspaceSystemPrompt('');
+      setNewWorkspaceApprovalPolicy('never');
+      setSelectedTemplateId(BUILT_IN_TEMPLATES[0].id);
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to create workspace');
     } finally {
@@ -694,7 +826,10 @@ function WorkspaceScreen({
     createThreadInFlight.current = true;
     setCreatingThread(true);
     try {
-      const agent = await createAgent(activeWorkspace.name, model, cwd);
+      const agent = await createAgent(activeWorkspace.name, model, cwd, {
+        approvalPolicy: activeWorkspace.approvalPolicy || 'never',
+        systemPrompt: activeWorkspace.systemPrompt || '',
+      });
       addThreadToWorkspace({
         workspaceId: activeWorkspace.id,
         threadAgentId: agent.id,
@@ -868,7 +1003,21 @@ function WorkspaceScreen({
     setSavingModel(true);
     try {
       await updateAgentModel(activeAgent.id, nextModel);
-      if (activeWorkspace) updateWorkspaceModel(activeWorkspace.id, nextModel);
+      if (activeWorkspace) {
+        updateWorkspaceModel(activeWorkspace.id, nextModel);
+        await persistWorkspaceRecord({
+          id: activeWorkspace.id,
+          bridgeUrl,
+          name: activeWorkspace.name,
+          model: nextModel,
+          cwd: activeWorkspace.cwd,
+          approvalPolicy: activeWorkspace.approvalPolicy,
+          systemPrompt: activeWorkspace.systemPrompt,
+          templateId: activeWorkspace.templateId,
+          templateIcon: activeWorkspace.templateIcon,
+          createdAt: activeWorkspace.createdAt,
+        });
+      }
       setShowEditModel(false);
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to update model');
@@ -1572,6 +1721,37 @@ function WorkspaceScreen({
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>New Agent</Text>
+            <Text style={s.label}>Template</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.templateRow}>
+              {availableTemplates.map((template) => {
+                const selected = selectedTemplateId === template.id;
+                return (
+                  <Pressable
+                    key={template.id}
+                    style={[s.templateChip, selected && s.templateChipActive]}
+                    onPress={() => applyTemplate(template)}
+                  >
+                    <Text style={s.templateChipText}>{template.icon} {template.name}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={s.templateSaveRow}>
+              <TextInput
+                style={[s.input, s.templateSaveInput]}
+                value={customTemplateName}
+                onChangeText={setCustomTemplateName}
+                placeholder="Save current config as template"
+                placeholderTextColor={colors.textMuted}
+              />
+              <Pressable
+                style={[s.cancelBtn, (savingTemplate || !customTemplateName.trim()) && s.smallActionBtnDisabled]}
+                onPress={() => void handleSaveCustomTemplate()}
+                disabled={savingTemplate || !customTemplateName.trim()}
+              >
+                <Text style={s.cancelText}>{savingTemplate ? 'Saving...' : 'Save'}</Text>
+              </Pressable>
+            </View>
             <Text style={s.label}>Agent Name</Text>
             <TextInput
               style={s.input}
@@ -1582,6 +1762,20 @@ function WorkspaceScreen({
               autoFocus={true}
             />
             <Text style={s.label}>Model</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.modelOptionRow}>
+              {MODEL_OPTIONS.map((model) => {
+                const selected = newWorkspaceModel === model;
+                return (
+                  <Pressable
+                    key={model}
+                    style={[s.modelOptionChip, selected && s.modelOptionChipActive]}
+                    onPress={() => setNewWorkspaceModel(model)}
+                  >
+                    <Text style={[s.modelOptionText, selected && s.modelOptionTextActive]}>{model}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
             <TextInput
               style={s.input}
               value={newWorkspaceModel}
@@ -1590,12 +1784,52 @@ function WorkspaceScreen({
               placeholderTextColor={colors.textMuted}
             />
             <Text style={s.label}>Working Directory</Text>
+            <View style={s.cwdRow}>
+              <TextInput
+                style={[s.input, s.cwdInput]}
+                value={newWorkspaceCwd}
+                onChangeText={setNewWorkspaceCwd}
+                placeholder="~/projects"
+                placeholderTextColor={colors.textMuted}
+              />
+              <Pressable
+                style={s.cancelBtn}
+                onPress={() => {
+                  setShowDirectoryPicker(true);
+                  setDirectoryResolvedCwd(newWorkspaceCwd.trim() || '.');
+                  void loadDirectoryOptions('.');
+                }}
+              >
+                <Text style={s.cancelText}>Browse</Text>
+              </Pressable>
+            </View>
+            <Text style={s.label}>Approval Policy</Text>
+            <View style={s.themeModeRow}>
+              <Pressable
+                style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipActive]}
+                onPress={() => setNewWorkspaceApprovalPolicy('never')}
+              >
+                <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipTextActive]}>
+                  Auto-approve
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipActive]}
+                onPress={() => setNewWorkspaceApprovalPolicy('on-request')}
+              >
+                <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipTextActive]}>
+                  Ask first
+                </Text>
+              </Pressable>
+            </View>
+            <Text style={s.label}>System Prompt</Text>
             <TextInput
-              style={s.input}
-              value={newWorkspaceCwd}
-              onChangeText={setNewWorkspaceCwd}
-              placeholder="~/projects"
+              style={[s.input, s.systemPromptInput]}
+              value={newWorkspaceSystemPrompt}
+              onChangeText={setNewWorkspaceSystemPrompt}
+              placeholder="Instructions prepended to every turn"
               placeholderTextColor={colors.textMuted}
+              multiline
             />
             <View style={s.modalActions}>
               <Pressable style={s.cancelBtn} onPress={() => setShowCreateWorkspace(false)}>
@@ -1607,6 +1841,53 @@ function WorkspaceScreen({
                 disabled={creatingWorkspace || !newWorkspaceName.trim()}
               >
                 <Text style={s.primaryText}>{creatingWorkspace ? 'Creating...' : 'Create'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showDirectoryPicker} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={s.modal}>
+            <Text style={s.modalTitle}>Choose Directory</Text>
+            <Text style={s.fileBrowserPathLabel}>{directoryPath}</Text>
+            <ScrollView style={s.fileListWrap}>
+              <Pressable
+                style={s.fileRow}
+                onPress={() => {
+                  if (directoryPath === '.') return;
+                  const parent = directoryPath.split('/').slice(0, -1).join('/') || '.';
+                  void loadDirectoryOptions(parent);
+                }}
+              >
+                <Text style={s.fileRowName}>[DIR] ..</Text>
+              </Pressable>
+              {loadingDirectories && <Text style={s.fileHint}>Loading directories...</Text>}
+              {!loadingDirectories && directoryEntries.map((entry) => (
+                <Pressable
+                  key={entry.path}
+                  style={s.fileRow}
+                  onPress={() => {
+                    void loadDirectoryOptions(entry.path);
+                  }}
+                >
+                  <Text style={s.fileRowName}>[DIR] {entry.name}</Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setShowDirectoryPicker(false)}>
+                <Text style={s.cancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                style={s.primaryBtn}
+                onPress={() => {
+                  setNewWorkspaceCwd(directoryResolvedCwd || newWorkspaceCwd);
+                  setShowDirectoryPicker(false);
+                }}
+              >
+                <Text style={s.primaryText}>Select</Text>
               </Pressable>
             </View>
           </View>
@@ -2451,6 +2732,76 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     padding: 16,
+  },
+  templateRow: {
+    gap: 8,
+    marginBottom: 10,
+  },
+  templateChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  templateChipActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
+  templateChipText: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontFamily: typography.medium,
+  },
+  templateSaveRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  templateSaveInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  modelOptionRow: {
+    gap: 8,
+    marginBottom: 8,
+  },
+  modelOptionChip: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: colors.surfaceSubtle,
+  },
+  modelOptionChipActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
+  },
+  modelOptionText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontFamily: typography.medium,
+  },
+  modelOptionTextActive: {
+    color: colors.accent,
+    fontFamily: typography.semibold,
+  },
+  cwdRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  cwdInput: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  systemPromptInput: {
+    minHeight: 84,
+    textAlignVertical: 'top',
   },
   fileBrowserModal: {
     maxHeight: '88%',

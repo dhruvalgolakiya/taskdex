@@ -54,10 +54,10 @@ export function initializedNotification(): string {
 }
 
 // Thread operations
-export function threadStartRequest(model: string, cwd?: string): string {
+export function threadStartRequest(model: string, cwd?: string, approvalPolicy = 'never'): string {
   const params: Record<string, unknown> = {
     model,
-    approvalPolicy: 'never',
+    approvalPolicy,
     sandbox: 'danger-full-access',
   };
   if (cwd) params.cwd = cwd;

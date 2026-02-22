@@ -18,6 +18,8 @@ interface AgentInfo {
   name: string;
   model: string;
   cwd: string;
+  approvalPolicy: string;
+  systemPrompt: string;
   status: 'initializing' | 'ready' | 'working' | 'error' | 'stopped';
   threadId: string | null;
   currentTurnId: string | null;
@@ -50,7 +52,13 @@ export class AgentManager {
     this.broadcast = broadcast;
   }
 
-  async createAgent(name: string, model: string, cwd: string): Promise<Omit<AgentInfo, 'process' | 'buffer' | 'pendingResponses'>> {
+  async createAgent(
+    name: string,
+    model: string,
+    cwd: string,
+    approvalPolicy = 'never',
+    systemPrompt = '',
+  ): Promise<Omit<AgentInfo, 'process' | 'buffer' | 'pendingResponses'>> {
     const id = uuid();
     console.log(`\n${BG_BLUE}${WHITE}${BOLD} NEW AGENT ${RESET} ${CYAN}${name}${RESET} (${DIM}${id.slice(0, 8)}${RESET})`);
     console.log(`  ${DIM}Model: ${model} | CWD: ${cwd}${RESET}`);
@@ -66,6 +74,8 @@ export class AgentManager {
       name,
       model,
       cwd,
+      approvalPolicy,
+      systemPrompt,
       status: 'initializing',
       threadId: null,
       currentTurnId: null,
@@ -122,7 +132,7 @@ export class AgentManager {
     this.write(agent, initializedNotification());
 
     // Start thread
-    const threadRes = await this.sendRequest(agent, threadStartRequest(model, cwd));
+    const threadRes = await this.sendRequest(agent, threadStartRequest(model, cwd, approvalPolicy));
     if (threadRes.error) {
       throw new Error(`Thread start failed: ${threadRes.error.message}`);
     }
@@ -145,7 +155,10 @@ export class AgentManager {
     agent.status = 'working';
     agent.messages.push({ role: 'user', type: 'user', text, timestamp: Date.now() });
 
-    const turnReq = turnStartRequest(agent.threadId, text, agent.model);
+    const promptText = agent.systemPrompt?.trim()
+      ? `${agent.systemPrompt.trim()}\n\n${text}`
+      : text;
+    const turnReq = turnStartRequest(agent.threadId, promptText, agent.model);
     const res = await this.sendRequest(agent, turnReq);
     if (res.result) {
       const turnData = res.result as Record<string, unknown>;
@@ -180,6 +193,20 @@ export class AgentManager {
     console.log(`  ${MAGENTA}[${agent.name}] Model updated to: ${model}${RESET}`);
   }
 
+  updateConfig(agentId: string, config: { model?: string; approvalPolicy?: string; systemPrompt?: string }): void {
+    const agent = this.agents.get(agentId);
+    if (!agent) throw new Error('Agent not found');
+    if (typeof config.model === 'string' && config.model.trim()) {
+      agent.model = config.model.trim();
+    }
+    if (typeof config.approvalPolicy === 'string' && config.approvalPolicy.trim()) {
+      agent.approvalPolicy = config.approvalPolicy.trim();
+    }
+    if (typeof config.systemPrompt === 'string') {
+      agent.systemPrompt = config.systemPrompt;
+    }
+  }
+
   listAgents() {
     return Array.from(this.agents.values()).map((a) => this.serialize(a));
   }
@@ -195,6 +222,8 @@ export class AgentManager {
       name: agent.name,
       model: agent.model,
       cwd: agent.cwd,
+      approvalPolicy: agent.approvalPolicy,
+      systemPrompt: agent.systemPrompt,
       status: agent.status,
       threadId: agent.threadId,
       currentTurnId: agent.currentTurnId,

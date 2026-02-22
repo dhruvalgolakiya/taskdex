@@ -219,12 +219,26 @@ wss.on('connection', (ws, req) => {
     try {
       switch (action) {
         case 'create_agent': {
-          const { name, model, cwd } = params as { name: string; model: string; cwd: string };
+          const {
+            name,
+            model,
+            cwd,
+            approvalPolicy,
+            systemPrompt,
+          } = params as {
+            name: string;
+            model: string;
+            cwd: string;
+            approvalPolicy?: string;
+            systemPrompt?: string;
+          };
           const defaultCwd = process.env.CODEX_CWD || process.cwd();
           const agent = await manager.createAgent(
             name || 'Agent',
             model || 'gpt-5.1-codex',
             cwd || defaultCwd,
+            approvalPolicy || 'never',
+            systemPrompt || '',
           );
           reply(agent);
           break;
@@ -263,6 +277,23 @@ wss.on('connection', (ws, req) => {
           break;
         }
 
+        case 'update_agent_config': {
+          const {
+            agentId,
+            model,
+            approvalPolicy,
+            systemPrompt,
+          } = params as {
+            agentId: string;
+            model?: string;
+            approvalPolicy?: string;
+            systemPrompt?: string;
+          };
+          manager.updateConfig(agentId, { model, approvalPolicy, systemPrompt });
+          reply({ ok: true });
+          break;
+        }
+
         case 'register_push_token': {
           const { token } = params as { token: string };
           if (!session.clientId) {
@@ -293,6 +324,27 @@ wss.on('connection', (ws, req) => {
             cwd: path.resolve(cwd || defaultCwd),
             path: relativePath || '.',
             entries: serialized,
+          });
+          break;
+        }
+
+        case 'list_directories': {
+          const { cwd, path: relativePath } = params as { cwd: string; path?: string };
+          const defaultCwd = process.env.CODEX_CWD || process.cwd();
+          const target = resolveWithinCwd(cwd || defaultCwd, relativePath);
+          const entries = await fsPromises.readdir(target, { withFileTypes: true });
+          const directories = entries
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => ({
+              name: entry.name,
+              path: path.join(relativePath || '.', entry.name),
+              type: 'directory',
+            }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+          reply({
+            cwd: path.resolve(cwd || defaultCwd),
+            path: relativePath || '.',
+            entries: directories,
           });
           break;
         }
