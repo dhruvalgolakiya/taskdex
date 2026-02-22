@@ -95,6 +95,29 @@ function resolveWithinCwd(cwd: string, relativePath?: string): string {
   throw new Error('Path escapes cwd');
 }
 
+function getReposRoot(): string {
+  const root = process.env.REPOS_DIR
+    ? path.resolve(process.env.REPOS_DIR)
+    : path.join(os.homedir(), '.pylon', 'repos');
+  fs.mkdirSync(root, { recursive: true });
+  return root;
+}
+
+function resolveWithinBase(base: string, targetPath: string): string {
+  const resolvedBase = path.resolve(base);
+  const resolved = path.resolve(targetPath);
+  if (resolved === resolvedBase || resolved.startsWith(`${resolvedBase}${path.sep}`)) {
+    return resolved;
+  }
+  throw new Error('Path escapes repository root');
+}
+
+function repoNameFromUrl(url: string): string {
+  const normalized = url.replace(/\/$/, '');
+  const base = normalized.split('/').pop() || 'repo';
+  return base.replace(/\.git$/i, '') || 'repo';
+}
+
 function gitForCwd(cwd: string) {
   return simpleGit({
     baseDir: path.resolve(cwd || process.cwd()),
@@ -426,6 +449,58 @@ wss.on('connection', (ws, req) => {
           const git = gitForCwd(cwd || process.cwd());
           await git.checkout(branch);
           reply({ ok: true });
+          break;
+        }
+
+        case 'clone_repo': {
+          const { url } = params as { url: string };
+          if (!url?.trim()) throw new Error('url is required');
+          const reposRoot = getReposRoot();
+          const baseName = repoNameFromUrl(url.trim());
+          let targetPath = path.join(reposRoot, baseName);
+          let suffix = 1;
+          while (fs.existsSync(targetPath)) {
+            targetPath = path.join(reposRoot, `${baseName}-${suffix}`);
+            suffix += 1;
+          }
+          await simpleGit().clone(url.trim(), targetPath);
+          reply({ ok: true, path: targetPath, name: path.basename(targetPath) });
+          break;
+        }
+
+        case 'list_repos': {
+          const reposRoot = getReposRoot();
+          const entries = await fsPromises.readdir(reposRoot, { withFileTypes: true });
+          const repos = await Promise.all(
+            entries
+              .filter((entry) => entry.isDirectory())
+              .map(async (entry) => {
+                const repoPath = path.join(reposRoot, entry.name);
+                if (!fs.existsSync(path.join(repoPath, '.git'))) return null;
+                let remote = '';
+                try {
+                  const remoteOutput = await simpleGit({ baseDir: repoPath }).remote(['get-url', 'origin']);
+                  remote = typeof remoteOutput === 'string' ? remoteOutput.trim() : '';
+                } catch {}
+                return {
+                  name: entry.name,
+                  path: repoPath,
+                  remote,
+                };
+              }),
+          );
+          reply((repos.filter(Boolean) as Array<{ name: string; path: string; remote: string }>).sort((a, b) => a.name.localeCompare(b.name)));
+          break;
+        }
+
+        case 'pull_repo': {
+          const { path: repoPath } = params as { path: string };
+          if (!repoPath?.trim()) throw new Error('path is required');
+          const reposRoot = getReposRoot();
+          const safePath = resolveWithinBase(reposRoot, repoPath.trim());
+          const git = simpleGit({ baseDir: safePath });
+          const result = await git.pull();
+          reply({ ok: true, summary: result.summary });
           break;
         }
 

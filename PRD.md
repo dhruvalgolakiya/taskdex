@@ -225,11 +225,11 @@ Run bridge on a VPS so agents keep working when your laptop sleeps.
 
 ### 6.3 Remote Repo Management
 
-- [ ] Bridge action: `clone_repo { url }` — git clone to bridge machine
-- [ ] Bridge action: `list_repos` — show cloned repos with paths
-- [ ] Bridge action: `pull_repo { path }` — git pull
-- [ ] Mobile screen: manage repos on cloud bridge
-- [ ] Use repo paths as cwd when creating agents
+- [x] Bridge action: `clone_repo { url }` — git clone to bridge machine
+- [x] Bridge action: `list_repos` — show cloned repos with paths
+- [x] Bridge action: `pull_repo { path }` — git pull
+- [x] Mobile screen: manage repos on cloud bridge
+- [x] Use repo paths as cwd when creating agents
 
 ---
 

@@ -249,6 +249,11 @@ function WorkspaceScreen({
   const [directoryPath, setDirectoryPath] = useState('.');
   const [directoryResolvedCwd, setDirectoryResolvedCwd] = useState('');
   const [loadingDirectories, setLoadingDirectories] = useState(false);
+  const [showRepoManager, setShowRepoManager] = useState(false);
+  const [repoEntries, setRepoEntries] = useState<Array<{ name: string; path: string; remote?: string }>>([]);
+  const [loadingRepos, setLoadingRepos] = useState(false);
+  const [cloneRepoUrl, setCloneRepoUrl] = useState('');
+  const [cloningRepo, setCloningRepo] = useState(false);
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const createWorkspaceInFlight = useRef(false);
 
@@ -741,6 +746,46 @@ function WorkspaceScreen({
     }
   }, [newWorkspaceCwd]);
 
+  const refreshRepoEntries = useCallback(async () => {
+    setLoadingRepos(true);
+    try {
+      const res = await sendRequest('list_repos');
+      if (res.type === 'response' && Array.isArray(res.data)) {
+        setRepoEntries(res.data as Array<{ name: string; path: string; remote?: string }>);
+      } else {
+        setRepoEntries([]);
+      }
+    } catch {
+      setRepoEntries([]);
+    } finally {
+      setLoadingRepos(false);
+    }
+  }, []);
+
+  const handleCloneRepo = useCallback(async () => {
+    const url = cloneRepoUrl.trim();
+    if (!url) return;
+    setCloningRepo(true);
+    try {
+      await sendRequest('clone_repo', { url });
+      setCloneRepoUrl('');
+      await refreshRepoEntries();
+    } catch (err: any) {
+      Alert.alert('Clone failed', err?.message || 'Could not clone repository');
+    } finally {
+      setCloningRepo(false);
+    }
+  }, [cloneRepoUrl, refreshRepoEntries]);
+
+  const handlePullRepo = useCallback(async (repoPath: string) => {
+    try {
+      await sendRequest('pull_repo', { path: repoPath });
+      await refreshRepoEntries();
+    } catch (err: any) {
+      Alert.alert('Pull failed', err?.message || 'Could not pull repository');
+    }
+  }, [refreshRepoEntries]);
+
   const handleSaveCustomTemplate = useCallback(async () => {
     const name = customTemplateName.trim();
     if (!name) return;
@@ -957,6 +1002,11 @@ function WorkspaceScreen({
     if (!showSettings) return;
     void handleCheckBridgeHealth();
   }, [showSettings, handleCheckBridgeHealth]);
+
+  useEffect(() => {
+    if (!showRepoManager) return;
+    void refreshRepoEntries();
+  }, [refreshRepoEntries, showRepoManager]);
 
   const handleSaveBridgeUrl = () => {
     setBridgeUrl(urlInput.trim());
@@ -1902,6 +1952,15 @@ function WorkspaceScreen({
               >
                 <Text style={s.cancelText}>Browse</Text>
               </Pressable>
+              <Pressable
+                style={s.cancelBtn}
+                onPress={() => {
+                  setShowRepoManager(true);
+                  void refreshRepoEntries();
+                }}
+              >
+                <Text style={s.cancelText}>Repos</Text>
+              </Pressable>
             </View>
             <Text style={s.label}>Approval Policy</Text>
             <View style={s.themeModeRow}>
@@ -1988,6 +2047,63 @@ function WorkspaceScreen({
                 }}
               >
                 <Text style={s.primaryText}>Select</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      <Modal visible={showRepoManager} transparent={true} animationType="fade">
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={s.modal}>
+            <Text style={s.modalTitle}>Repositories</Text>
+            <TextInput
+              style={s.input}
+              value={cloneRepoUrl}
+              onChangeText={setCloneRepoUrl}
+              placeholder="https://github.com/org/repo.git"
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <View style={s.settingsInlineActions}>
+              <Pressable
+                style={[s.cancelBtn, (cloningRepo || !cloneRepoUrl.trim()) && s.smallActionBtnDisabled]}
+                onPress={() => void handleCloneRepo()}
+                disabled={cloningRepo || !cloneRepoUrl.trim()}
+              >
+                <Text style={s.cancelText}>{cloningRepo ? 'Cloning...' : 'Clone Repo'}</Text>
+              </Pressable>
+              <Pressable style={s.cancelBtn} onPress={() => void refreshRepoEntries()}>
+                <Text style={s.cancelText}>Refresh</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={s.fileListWrap}>
+              {loadingRepos && <Text style={s.fileHint}>Loading repositories...</Text>}
+              {!loadingRepos && repoEntries.map((repo) => (
+                <View key={repo.path} style={s.repoRow}>
+                  <View style={s.repoMeta}>
+                    <Text style={s.repoName} numberOfLines={1}>{repo.name}</Text>
+                    <Text style={s.repoPath} numberOfLines={1}>{repo.path}</Text>
+                  </View>
+                  <Pressable style={s.cancelBtn} onPress={() => void handlePullRepo(repo.path)}>
+                    <Text style={s.cancelText}>Pull</Text>
+                  </Pressable>
+                  <Pressable
+                    style={s.primaryBtn}
+                    onPress={() => {
+                      setNewWorkspaceCwd(repo.path);
+                      setShowRepoManager(false);
+                    }}
+                  >
+                    <Text style={s.primaryText}>Use</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setShowRepoManager(false)}>
+                <Text style={s.cancelText}>Close</Text>
               </Pressable>
             </View>
           </View>
@@ -3015,6 +3131,29 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     color: '#c23a3a',
     fontSize: 12,
     fontFamily: typography.medium,
+  },
+  repoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  repoMeta: {
+    flex: 1,
+    gap: 2,
+  },
+  repoName: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontFamily: typography.semibold,
+  },
+  repoPath: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontFamily: typography.mono,
   },
   gitBlock: {
     maxHeight: 380,
