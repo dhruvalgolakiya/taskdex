@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import { requireNativeModule } from 'expo-modules-core';
+import { requireOptionalNativeModule } from 'expo-modules-core';
 
 type WidgetBridgeModule = {
   setSummaryJson: (summaryJson: string) => boolean;
@@ -15,7 +15,7 @@ export type AgentWidgetSummary = {
 };
 
 const nativeModule: WidgetBridgeModule | null = Platform.OS === 'ios'
-  ? requireNativeModule<WidgetBridgeModule>('PylonWidgetBridge')
+  ? requireOptionalNativeModule<WidgetBridgeModule>('PylonWidgetBridge')
   : null;
 
 export function setWidgetSummary(agents: AgentWidgetSummary[]) {
