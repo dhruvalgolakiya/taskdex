@@ -1,7 +1,7 @@
 import ExpoModulesCore
 import WidgetKit
 
-private let appGroupIdentifier = "group.com.dhruvalg.pylon.shared2"
+private let appGroupIdentifier = "group.expoLiveActivity.sharedData"
 private let summaryStorageKey = "pylon_widget_agents_v1"
 private let summaryUpdatedAtKey = "pylon_widget_agents_updated_at"
 
