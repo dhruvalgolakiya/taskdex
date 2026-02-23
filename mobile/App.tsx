@@ -17,6 +17,7 @@ import {
   Linking,
   LayoutAnimation,
   UIManager,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
@@ -464,6 +465,9 @@ function WorkspaceScreen({
   const [execCwdInput, setExecCwdInput] = useState('/Users/apple/Work/DhruvalPersonal');
   const [execApprovalPolicyInput, setExecApprovalPolicyInput] = useState<'never' | 'on-request'>('never');
   const [execSystemPromptInput, setExecSystemPromptInput] = useState('');
+  const dismissKeyboard = useCallback(() => {
+    Keyboard.dismiss();
+  }, []);
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -3437,213 +3441,231 @@ function WorkspaceScreen({
       <Modal visible={showExecRunner} transparent={true} animationType="fade" onRequestClose={() => setShowExecRunner(false)}>
         <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Exec Mode</Text>
-            <Text style={s.themeHint}>Run non-interactive Codex jobs and multi-step automation flows.</Text>
-
-            <Text style={s.label}>Job Name</Text>
-            <TextInput
-              style={s.input}
-              value={execNameInput}
-              onChangeText={setExecNameInput}
-              placeholder="Nightly bug sweep"
-              placeholderTextColor={colors.textMuted}
-              autoCorrect={false}
-            />
-
-            <Text style={s.label}>Mode</Text>
-            <View style={s.themeModeRow}>
-              {(['task', 'flow'] as ExecModeType[]).map((mode) => (
-                <Pressable
-                  key={mode}
-                  style={[s.themeModeChip, execModeInput === mode && s.themeModeChipActive]}
-                  onPress={() => setExecModeInput(mode)}
-                >
-                  <Text style={[s.themeModeChipText, execModeInput === mode && s.themeModeChipTextActive]}>
-                    {mode}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            {execModeInput === 'task' ? (
-              <>
-                <Text style={s.label}>Prompt</Text>
-                <TextInput
-                  style={[s.input, s.systemPromptInput]}
-                  value={execPromptInput}
-                  onChangeText={setExecPromptInput}
-                  placeholder="Run full code review and commit safe fixes."
-                  placeholderTextColor={colors.textMuted}
-                  multiline
-                />
-              </>
-            ) : (
-              <>
-                <Text style={s.label}>Flow Steps (one per line)</Text>
-                <TextInput
-                  style={[s.input, s.systemPromptInput]}
-                  value={execFlowInput}
-                  onChangeText={setExecFlowInput}
-                  placeholder={`Audit current branch\nFix P0/P1 issues\nRun tests and commit`}
-                  placeholderTextColor={colors.textMuted}
-                  multiline
-                />
-              </>
-            )}
-
-            <Text style={s.label}>Model</Text>
-            <TextInput
-              style={s.input}
-              value={execModelInput}
-              onChangeText={setExecModelInput}
-              placeholder="gpt-5.1-codex"
-              placeholderTextColor={colors.textMuted}
-              autoCorrect={false}
-              autoCapitalize="none"
-            />
-
-            <Text style={s.label}>Working Directory</Text>
-            <TextInput
-              style={s.input}
-              value={execCwdInput}
-              onChangeText={setExecCwdInput}
-              placeholder="/Users/apple/Work/DhruvalPersonal"
-              placeholderTextColor={colors.textMuted}
-              autoCorrect={false}
-              autoCapitalize="none"
-            />
-
-            <Text style={s.label}>Approval Policy</Text>
-            <View style={s.themeModeRow}>
-              {(['never', 'on-request'] as const).map((policy) => (
-                <Pressable
-                  key={policy}
-                  style={[s.themeModeChip, execApprovalPolicyInput === policy && s.themeModeChipActive]}
-                  onPress={() => setExecApprovalPolicyInput(policy)}
-                >
-                  <Text style={[s.themeModeChipText, execApprovalPolicyInput === policy && s.themeModeChipTextActive]}>
-                    {policy}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={s.label}>System Prompt (optional)</Text>
-            <TextInput
-              style={[s.input, s.systemPromptInput]}
-              value={execSystemPromptInput}
-              onChangeText={setExecSystemPromptInput}
-              placeholder="Always include tests and concise summary."
-              placeholderTextColor={colors.textMuted}
-              multiline
-            />
-
-            <View style={s.execActionRow}>
-              <Pressable style={s.cancelBtn} onPress={handleSaveExecPreset}>
-                <Text style={s.cancelText}>Save Preset</Text>
-              </Pressable>
-              <Pressable
-                style={[s.primaryBtn, runningExec && s.smallActionBtnDisabled]}
-                onPress={() => void handleRunExec()}
-                disabled={runningExec}
-              >
-                <Text style={s.primaryText}>{runningExec ? 'Starting...' : 'Run Now'}</Text>
+            <View style={s.execHeaderRow}>
+              <Text style={[s.modalTitle, s.execModalTitle]}>Exec Mode</Text>
+              <Pressable style={s.cancelBtn} onPress={dismissKeyboard}>
+                <Text style={s.cancelText}>Done</Text>
               </Pressable>
             </View>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardDismissMode="on-drag"
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={s.execModalContent}
+            >
+              <Text style={s.themeHint}>Run non-interactive Codex jobs and multi-step automation flows.</Text>
 
-            <Text style={s.label}>Saved Automations</Text>
-            <ScrollView style={s.execListWrap}>
-              {execPresets.map((preset) => (
-                <View key={preset.id} style={s.execListRow}>
-                  <View style={s.execListRowTop}>
-                    <Text style={s.execListTitle} numberOfLines={1}>{preset.name}</Text>
-                    <Text style={s.execListBadge}>{preset.mode}</Text>
-                  </View>
-                  <Text style={s.execListMeta} numberOfLines={1}>
-                    {preset.model} • {preset.cwd}
-                  </Text>
-                  <Text style={s.execListMeta} numberOfLines={1}>
-                    {preset.mode === 'flow' ? `${preset.steps.length} steps` : 'Single task'}
-                  </Text>
-                  <View style={s.execListActions}>
-                    <Pressable style={s.cancelBtn} onPress={() => applyExecPresetToForm(preset)}>
-                      <Text style={s.cancelText}>Load</Text>
-                    </Pressable>
-                    <Pressable style={s.cancelBtn} onPress={() => void handleRunExec(preset)}>
-                      <Text style={s.cancelText}>Run</Text>
-                    </Pressable>
-                    <Pressable style={s.cancelBtn} onPress={() => handleDeleteExecPreset(preset.id)}>
-                      <Text style={s.cancelText}>Delete</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ))}
-              {execPresets.length === 0 && (
-                <Text style={s.fileHint}>Save a preset to reuse job/flow definitions.</Text>
+              <Text style={s.label}>Job Name</Text>
+              <TextInput
+                style={s.input}
+                value={execNameInput}
+                onChangeText={setExecNameInput}
+                placeholder="Nightly bug sweep"
+                placeholderTextColor={colors.textMuted}
+                autoCorrect={false}
+                returnKeyType="done"
+                onSubmitEditing={dismissKeyboard}
+              />
+
+              <Text style={s.label}>Mode</Text>
+              <View style={s.themeModeRow}>
+                {(['task', 'flow'] as ExecModeType[]).map((mode) => (
+                  <Pressable
+                    key={mode}
+                    style={[s.themeModeChip, execModeInput === mode && s.themeModeChipActive]}
+                    onPress={() => setExecModeInput(mode)}
+                  >
+                    <Text style={[s.themeModeChipText, execModeInput === mode && s.themeModeChipTextActive]}>
+                      {mode}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              {execModeInput === 'task' ? (
+                <>
+                  <Text style={s.label}>Prompt</Text>
+                  <TextInput
+                    style={[s.input, s.systemPromptInput]}
+                    value={execPromptInput}
+                    onChangeText={setExecPromptInput}
+                    placeholder="Run full code review and commit safe fixes."
+                    placeholderTextColor={colors.textMuted}
+                    multiline
+                  />
+                </>
+              ) : (
+                <>
+                  <Text style={s.label}>Flow Steps (one per line)</Text>
+                  <TextInput
+                    style={[s.input, s.systemPromptInput]}
+                    value={execFlowInput}
+                    onChangeText={setExecFlowInput}
+                    placeholder={`Audit current branch\nFix P0/P1 issues\nRun tests and commit`}
+                    placeholderTextColor={colors.textMuted}
+                    multiline
+                  />
+                </>
               )}
-            </ScrollView>
 
-            <Text style={s.label}>Recent Runs</Text>
-            <ScrollView style={s.execRunsWrap}>
-              {execRuns.map((run) => (
-                <View key={run.id} style={s.execListRow}>
-                  <View style={s.execListRowTop}>
-                    <Text style={s.execListTitle} numberOfLines={1}>{run.name}</Text>
-                    <Text
-                      style={[
-                        s.execRunStatus,
-                        run.status === 'completed' && s.execRunStatusCompleted,
-                        run.status === 'failed' && s.execRunStatusFailed,
-                      ]}
-                    >
-                      {run.status}
+              <Text style={s.label}>Model</Text>
+              <TextInput
+                style={s.input}
+                value={execModelInput}
+                onChangeText={setExecModelInput}
+                placeholder="gpt-5.1-codex"
+                placeholderTextColor={colors.textMuted}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="done"
+                onSubmitEditing={dismissKeyboard}
+              />
+
+              <Text style={s.label}>Working Directory</Text>
+              <TextInput
+                style={s.input}
+                value={execCwdInput}
+                onChangeText={setExecCwdInput}
+                placeholder="/Users/apple/Work/DhruvalPersonal"
+                placeholderTextColor={colors.textMuted}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="done"
+                onSubmitEditing={dismissKeyboard}
+              />
+
+              <Text style={s.label}>Approval Policy</Text>
+              <View style={s.themeModeRow}>
+                {(['never', 'on-request'] as const).map((policy) => (
+                  <Pressable
+                    key={policy}
+                    style={[s.themeModeChip, execApprovalPolicyInput === policy && s.themeModeChipActive]}
+                    onPress={() => setExecApprovalPolicyInput(policy)}
+                  >
+                    <Text style={[s.themeModeChipText, execApprovalPolicyInput === policy && s.themeModeChipTextActive]}>
+                      {policy}
                     </Text>
-                  </View>
-                  <Text style={s.execListMeta} numberOfLines={1}>
-                    {run.mode} • {run.stepCount} step{run.stepCount === 1 ? '' : 's'}
-                  </Text>
-                  <Text style={s.execListMeta} numberOfLines={1}>
-                    started {formatExecRunTime(run.startedAt)}
-                  </Text>
-                  {!!run.finishedAt && (
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={s.label}>System Prompt (optional)</Text>
+              <TextInput
+                style={[s.input, s.systemPromptInput]}
+                value={execSystemPromptInput}
+                onChangeText={setExecSystemPromptInput}
+                placeholder="Always include tests and concise summary."
+                placeholderTextColor={colors.textMuted}
+                multiline
+              />
+
+              <View style={s.execActionRow}>
+                <Pressable style={s.cancelBtn} onPress={handleSaveExecPreset}>
+                  <Text style={s.cancelText}>Save Preset</Text>
+                </Pressable>
+                <Pressable
+                  style={[s.primaryBtn, runningExec && s.smallActionBtnDisabled]}
+                  onPress={() => void handleRunExec()}
+                  disabled={runningExec}
+                >
+                  <Text style={s.primaryText}>{runningExec ? 'Starting...' : 'Run Now'}</Text>
+                </Pressable>
+              </View>
+
+              <Text style={s.label}>Saved Automations</Text>
+              <ScrollView style={s.execListWrap} keyboardShouldPersistTaps="handled">
+                {execPresets.map((preset) => (
+                  <View key={preset.id} style={s.execListRow}>
+                    <View style={s.execListRowTop}>
+                      <Text style={s.execListTitle} numberOfLines={1}>{preset.name}</Text>
+                      <Text style={s.execListBadge}>{preset.mode}</Text>
+                    </View>
                     <Text style={s.execListMeta} numberOfLines={1}>
-                      finished {formatExecRunTime(run.finishedAt)}
+                      {preset.model} • {preset.cwd}
                     </Text>
-                  )}
-                  {!!run.error && (
-                    <Text style={s.fileErrorText} numberOfLines={2}>
-                      {run.error}
+                    <Text style={s.execListMeta} numberOfLines={1}>
+                      {preset.mode === 'flow' ? `${preset.steps.length} steps` : 'Single task'}
                     </Text>
-                  )}
-                  {!!run.workspaceId && !!run.threadId && (
                     <View style={s.execListActions}>
-                      <Pressable
-                        style={s.cancelBtn}
-                        onPress={() => {
-                          setActiveWorkspace(run.workspaceId!);
-                          setActiveThread(run.workspaceId!, run.threadId!);
-                          setShowExecRunner(false);
-                        }}
-                      >
-                        <Text style={s.cancelText}>Open Thread</Text>
+                      <Pressable style={s.cancelBtn} onPress={() => applyExecPresetToForm(preset)}>
+                        <Text style={s.cancelText}>Load</Text>
+                      </Pressable>
+                      <Pressable style={s.cancelBtn} onPress={() => void handleRunExec(preset)}>
+                        <Text style={s.cancelText}>Run</Text>
+                      </Pressable>
+                      <Pressable style={s.cancelBtn} onPress={() => handleDeleteExecPreset(preset.id)}>
+                        <Text style={s.cancelText}>Delete</Text>
                       </Pressable>
                     </View>
-                  )}
-                </View>
-              ))}
-              {execRuns.length === 0 && (
-                <Text style={s.fileHint}>No runs yet.</Text>
-              )}
-            </ScrollView>
+                  </View>
+                ))}
+                {execPresets.length === 0 && (
+                  <Text style={s.fileHint}>Save a preset to reuse job/flow definitions.</Text>
+                )}
+              </ScrollView>
 
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={handleClearExecRuns}>
-                <Text style={s.cancelText}>Clear Runs</Text>
-              </Pressable>
-              <Pressable style={s.cancelBtn} onPress={() => setShowExecRunner(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-            </View>
+              <Text style={s.label}>Recent Runs</Text>
+              <ScrollView style={s.execRunsWrap} keyboardShouldPersistTaps="handled">
+                {execRuns.map((run) => (
+                  <View key={run.id} style={s.execListRow}>
+                    <View style={s.execListRowTop}>
+                      <Text style={s.execListTitle} numberOfLines={1}>{run.name}</Text>
+                      <Text
+                        style={[
+                          s.execRunStatus,
+                          run.status === 'completed' && s.execRunStatusCompleted,
+                          run.status === 'failed' && s.execRunStatusFailed,
+                        ]}
+                      >
+                        {run.status}
+                      </Text>
+                    </View>
+                    <Text style={s.execListMeta} numberOfLines={1}>
+                      {run.mode} • {run.stepCount} step{run.stepCount === 1 ? '' : 's'}
+                    </Text>
+                    <Text style={s.execListMeta} numberOfLines={1}>
+                      started {formatExecRunTime(run.startedAt)}
+                    </Text>
+                    {!!run.finishedAt && (
+                      <Text style={s.execListMeta} numberOfLines={1}>
+                        finished {formatExecRunTime(run.finishedAt)}
+                      </Text>
+                    )}
+                    {!!run.error && (
+                      <Text style={s.fileErrorText} numberOfLines={2}>
+                        {run.error}
+                      </Text>
+                    )}
+                    {!!run.workspaceId && !!run.threadId && (
+                      <View style={s.execListActions}>
+                        <Pressable
+                          style={s.cancelBtn}
+                          onPress={() => {
+                            setActiveWorkspace(run.workspaceId!);
+                            setActiveThread(run.workspaceId!, run.threadId!);
+                            setShowExecRunner(false);
+                          }}
+                        >
+                          <Text style={s.cancelText}>Open Thread</Text>
+                        </Pressable>
+                      </View>
+                    )}
+                  </View>
+                ))}
+                {execRuns.length === 0 && (
+                  <Text style={s.fileHint}>No runs yet.</Text>
+                )}
+              </ScrollView>
+
+              <View style={s.modalActions}>
+                <Pressable style={s.cancelBtn} onPress={handleClearExecRuns}>
+                  <Text style={s.cancelText}>Clear Runs</Text>
+                </Pressable>
+                <Pressable style={s.cancelBtn} onPress={() => setShowExecRunner(false)}>
+                  <Text style={s.cancelText}>Close</Text>
+                </Pressable>
+              </View>
+            </ScrollView>
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -4677,6 +4699,20 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     color: '#c23a3a',
     fontSize: 12,
     fontFamily: typography.medium,
+  },
+  execHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  execModalTitle: {
+    marginBottom: 0,
+    flex: 1,
+  },
+  execModalContent: {
+    paddingBottom: 8,
   },
   execActionRow: {
     flexDirection: 'row',
