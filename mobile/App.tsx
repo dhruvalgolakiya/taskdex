@@ -1274,6 +1274,15 @@ function WorkspaceScreen({
 
   useEffect(() => {
     const handleUrl = ({ url }: { url: string }) => {
+      const bridgeDetails = parseBridgeQrPayload(url || '');
+      if (bridgeDetails) {
+        setBridgeUrl(bridgeDetails.bridgeUrl);
+        setBridgeApiKey(bridgeDetails.apiKey);
+        setUrlInput(bridgeDetails.bridgeUrl);
+        setApiKeyInput(bridgeDetails.apiKey);
+        return;
+      }
+
       const threadId = extractThreadIdFromUrl(url || '');
       if (threadId) openThreadById(threadId);
     };
@@ -1282,13 +1291,21 @@ function WorkspaceScreen({
     Linking.getInitialURL()
       .then((url) => {
         if (!url) return;
+        const bridgeDetails = parseBridgeQrPayload(url);
+        if (bridgeDetails) {
+          setBridgeUrl(bridgeDetails.bridgeUrl);
+          setBridgeApiKey(bridgeDetails.apiKey);
+          setUrlInput(bridgeDetails.bridgeUrl);
+          setApiKeyInput(bridgeDetails.apiKey);
+          return;
+        }
         const threadId = extractThreadIdFromUrl(url);
         if (threadId) openThreadById(threadId);
       })
       .catch(() => {});
 
     return () => subscription.remove();
-  }, [openThreadById]);
+  }, [openThreadById, setBridgeApiKey, setBridgeUrl]);
 
   // Handle notification actions (reply, stop, open) from lock screen
   useEffect(() => {

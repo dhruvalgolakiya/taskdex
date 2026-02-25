@@ -36,6 +36,9 @@ taskdex init
 
 This will clone the repo and immediately run interactive terminal setup.
 Setup now defaults to `dev-client` runtime, can build the native app (`expo run:ios` / `expo run:android`), and then starts Expo in `--dev-client` mode.
+For iOS builds, setup asks whether to run on a real iPhone or Simulator, and supports choosing a specific iPhone device name.
+When a `pnpm-lock.yaml` is present in `mobile`, the CLI installs mobile dependencies with pnpm automatically.
+Setup writes runtime bridge env values into `mobile/.env.local`, sets `CODEX_CWD` for bridge agent workspace, and can pass `OPENAI_API_KEY` if provided.
 
 For an already-cloned repo:
 

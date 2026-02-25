@@ -2,7 +2,7 @@
 
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
@@ -41,6 +41,16 @@ function runCommand(command, args, options = {}) {
       reject(new Error(`${command} ${args.join(' ')} exited with code ${code ?? 'unknown'}`));
     });
   });
+}
+
+async function installMobileDependencies(mobileDir) {
+  const hasPnpmLock = existsSync(path.join(mobileDir, 'pnpm-lock.yaml'));
+  if (hasPnpmLock) {
+    // Expo mobile app in this repo is pnpm-based; npm can fail on some npm/arborist versions.
+    await runCommand(npxCmd, ['-y', 'pnpm@9', 'install'], { cwd: mobileDir });
+    return;
+  }
+  await runCommand(npmCmd, ['install'], { cwd: mobileDir });
 }
 
 function isTaskdexRepo(dir) {
@@ -150,11 +160,38 @@ function parseBuildPlatform(input) {
   return normalized;
 }
 
+function parseIosTarget(input) {
+  const normalized = input.trim().toLowerCase() || 'iphone';
+  if (['iphone', 'device', 'physical'].includes(normalized)) return 'iphone';
+  if (['simulator', 'sim', 'ios-simulator'].includes(normalized)) return 'simulator';
+  throw new Error('iOS target must be "iphone" or "simulator".');
+}
+
 function parseInstallChoice(input) {
   const normalized = input.trim().toLowerCase();
   if (!normalized || normalized === 'y' || normalized === 'yes') return true;
   if (normalized === 'n' || normalized === 'no') return false;
   throw new Error('Install choice must be Y or N.');
+}
+
+function upsertEnvVars(envFilePath, values) {
+  const keys = Object.keys(values);
+  const original = existsSync(envFilePath) ? readFileSync(envFilePath, 'utf8') : '';
+  const lines = original ? original.split(/\r?\n/) : [];
+  const seen = new Set();
+  const updated = lines.map((line) => {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/);
+    if (!match) return line;
+    const key = match[1];
+    if (!keys.includes(key)) return line;
+    seen.add(key);
+    return `${key}=${values[key]}`;
+  });
+  for (const key of keys) {
+    if (!seen.has(key)) updated.push(`${key}=${values[key]}`);
+  }
+  const nextContent = `${updated.filter((line) => line !== '').join('\n')}\n`;
+  writeFileSync(envFilePath, nextContent, 'utf8');
 }
 
 function wait(ms) {
@@ -173,12 +210,23 @@ async function readSetupConfig() {
     const runtime = parseRuntime(runtimeInput);
     let buildDevClient = false;
     let buildPlatform = process.platform === 'darwin' ? 'ios' : 'android';
+    let iosTarget = 'iphone';
+    let iosDeviceName = '';
+    const openAiApiKey = (await rl.question('OPENAI_API_KEY (optional, Enter to use current shell/Codex login): ')).trim();
+    const workspaceInput = (await rl.question('Agent workspace path [repo root]: ')).trim();
     if (runtime === 'dev-client') {
       const buildInput = await rl.question('Build native development client now? [Y/n]: ');
       buildDevClient = parseInstallChoice(buildInput);
       if (buildDevClient) {
         const platformInput = await rl.question(`Build platform (ios/android) [${buildPlatform}]: `);
         buildPlatform = parseBuildPlatform(platformInput);
+        if (buildPlatform === 'ios') {
+          const targetInput = await rl.question('iOS target (iphone/simulator) [iphone]: ');
+          iosTarget = parseIosTarget(targetInput);
+          if (iosTarget === 'iphone') {
+            iosDeviceName = (await rl.question('iPhone device name (optional, Enter to choose automatically): ')).trim();
+          }
+        }
       }
     }
 
@@ -189,6 +237,10 @@ async function readSetupConfig() {
       runtime,
       buildDevClient,
       buildPlatform,
+      iosTarget,
+      iosDeviceName,
+      openAiApiKey,
+      workspaceInput,
       installDeps: parseInstallChoice(installInput),
     };
   } finally {
@@ -203,11 +255,34 @@ async function runInteractiveSetup(rootDir) {
     throw new Error(`Invalid Taskdex repository at ${rootDir}`);
   }
 
-  const { port, apiKey, expoMode, runtime, buildDevClient, buildPlatform, installDeps } = await readSetupConfig();
+  const {
+    port,
+    apiKey,
+    expoMode,
+    runtime,
+    buildDevClient,
+    buildPlatform,
+    iosTarget,
+    iosDeviceName,
+    openAiApiKey,
+    workspaceInput,
+    installDeps,
+  } = await readSetupConfig();
   const bridgeUrl = `ws://${getLocalIPv4()}:${port}`;
+  const workspacePath = workspaceInput ? path.resolve(workspaceInput) : rootDir;
+
+  if (!existsSync(workspacePath)) {
+    throw new Error(`Workspace path does not exist: ${workspacePath}`);
+  }
+
+  upsertEnvVars(path.join(mobileDir, '.env.local'), {
+    EXPO_PUBLIC_BRIDGE_URL: bridgeUrl,
+    EXPO_PUBLIC_BRIDGE_API_KEY: apiKey,
+  });
 
   console.log(`\nBridge URL: ${bridgeUrl}`);
   console.log(`Bridge API key: ${apiKey}`);
+  console.log(`Agent workspace: ${workspacePath}`);
   console.log(`Expo mode: ${expoMode}\n`);
 
   if (installDeps) {
@@ -216,7 +291,7 @@ async function runInteractiveSetup(rootDir) {
     // Keep older clones working where this dependency might be missing.
     await runCommand(npmCmd, ['install', 'qrcode-terminal@^0.12.0'], { cwd: bridgeDir });
     console.log('\nInstalling mobile dependencies...\n');
-    await runCommand(npmCmd, ['install'], { cwd: mobileDir });
+    await installMobileDependencies(mobileDir);
   }
 
   console.log('\nStarting bridge server...\n');
@@ -227,6 +302,8 @@ async function runInteractiveSetup(rootDir) {
       ...process.env,
       PORT: String(port),
       API_KEY: apiKey,
+      CODEX_CWD: workspacePath,
+      ...(openAiApiKey ? { OPENAI_API_KEY: openAiApiKey } : {}),
     },
   });
 
@@ -245,7 +322,16 @@ async function runInteractiveSetup(rootDir) {
 
   if (runtime === 'dev-client' && buildDevClient) {
     console.log(`\nBuilding native dev client (${buildPlatform})...\n`);
-    await runCommand(npxCmd, ['expo', `run:${buildPlatform}`, '--no-bundler'], {
+    const buildArgs = ['expo', `run:${buildPlatform}`, '--no-bundler'];
+    if (buildPlatform === 'ios' && iosTarget === 'iphone') {
+      if (iosDeviceName) {
+        buildArgs.push('--device', iosDeviceName);
+      } else {
+        buildArgs.push('--device');
+      }
+    }
+
+    await runCommand(npxCmd, buildArgs, {
       cwd: mobileDir,
       env: expoEnv,
     });

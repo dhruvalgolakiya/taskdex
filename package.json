@@ -1,6 +1,6 @@
 {
   "name": "taskdex",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "Terminal-first installer and launcher for Taskdex mobile + bridge",
   "type": "module",
   "bin": {
