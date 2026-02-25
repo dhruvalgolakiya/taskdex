@@ -134,6 +134,22 @@ function parseExpoMode(input) {
   return normalized;
 }
 
+function parseRuntime(input) {
+  const normalized = input.trim().toLowerCase() || 'dev-client';
+  if (['dev-client', 'dev', 'devbuild', 'dev-build'].includes(normalized)) return 'dev-client';
+  if (['expo-go', 'go', 'expo'].includes(normalized)) return 'expo-go';
+  throw new Error('Runtime must be "dev-client" or "expo-go".');
+}
+
+function parseBuildPlatform(input) {
+  const fallback = process.platform === 'darwin' ? 'ios' : 'android';
+  const normalized = input.trim().toLowerCase() || fallback;
+  if (!['ios', 'android'].includes(normalized)) {
+    throw new Error('Build platform must be "ios" or "android".');
+  }
+  return normalized;
+}
+
 function parseInstallChoice(input) {
   const normalized = input.trim().toLowerCase();
   if (!normalized || normalized === 'y' || normalized === 'yes') return true;
@@ -152,12 +168,27 @@ async function readSetupConfig() {
     const portInput = await rl.question('Bridge port [3001]: ');
     const apiKeyInput = await rl.question('Bridge API key [auto-generate]: ');
     const expoModeInput = await rl.question('Expo mode (lan/tunnel) [lan]: ');
+    const runtimeInput = await rl.question('App runtime (dev-client/expo-go) [dev-client]: ');
     const installInput = await rl.question('Install npm dependencies first? [Y/n]: ');
+    const runtime = parseRuntime(runtimeInput);
+    let buildDevClient = false;
+    let buildPlatform = process.platform === 'darwin' ? 'ios' : 'android';
+    if (runtime === 'dev-client') {
+      const buildInput = await rl.question('Build native development client now? [Y/n]: ');
+      buildDevClient = parseInstallChoice(buildInput);
+      if (buildDevClient) {
+        const platformInput = await rl.question(`Build platform (ios/android) [${buildPlatform}]: `);
+        buildPlatform = parseBuildPlatform(platformInput);
+      }
+    }
 
     return {
       port: parsePort((portInput || '3001').trim()),
       apiKey: apiKeyInput.trim() || crypto.randomBytes(24).toString('hex'),
       expoMode: parseExpoMode(expoModeInput),
+      runtime,
+      buildDevClient,
+      buildPlatform,
       installDeps: parseInstallChoice(installInput),
     };
   } finally {
@@ -172,7 +203,7 @@ async function runInteractiveSetup(rootDir) {
     throw new Error(`Invalid Taskdex repository at ${rootDir}`);
   }
 
-  const { port, apiKey, expoMode, installDeps } = await readSetupConfig();
+  const { port, apiKey, expoMode, runtime, buildDevClient, buildPlatform, installDeps } = await readSetupConfig();
   const bridgeUrl = `ws://${getLocalIPv4()}:${port}`;
 
   console.log(`\nBridge URL: ${bridgeUrl}`);
@@ -182,6 +213,8 @@ async function runInteractiveSetup(rootDir) {
   if (installDeps) {
     console.log('Installing bridge dependencies...\n');
     await runCommand(npmCmd, ['install'], { cwd: bridgeDir });
+    // Keep older clones working where this dependency might be missing.
+    await runCommand(npmCmd, ['install', 'qrcode-terminal@^0.12.0'], { cwd: bridgeDir });
     console.log('\nInstalling mobile dependencies...\n');
     await runCommand(npmCmd, ['install'], { cwd: mobileDir });
   }
@@ -204,18 +237,32 @@ async function runInteractiveSetup(rootDir) {
 
   await wait(1200);
 
+  const expoEnv = {
+    ...process.env,
+    EXPO_PUBLIC_BRIDGE_URL: bridgeUrl,
+    EXPO_PUBLIC_BRIDGE_API_KEY: apiKey,
+  };
+
+  if (runtime === 'dev-client' && buildDevClient) {
+    console.log(`\nBuilding native dev client (${buildPlatform})...\n`);
+    await runCommand(npxCmd, ['expo', `run:${buildPlatform}`, '--no-bundler'], {
+      cwd: mobileDir,
+      env: expoEnv,
+    });
+  }
+
   console.log('\nStarting Expo. Scan the QR code to open the app.');
   console.log('Bridge URL and API key are prefilled from this terminal setup.\n');
+  if (runtime === 'dev-client' && !buildDevClient) {
+    console.log('If dev client is not installed yet, rerun setup and enable native build.\n');
+  }
+
+  const expoArgs = runtime === 'dev-client'
+    ? ['expo', 'start', '--dev-client', `--${expoMode}`]
+    : ['expo', 'start', `--${expoMode}`];
 
   try {
-    await runCommand(npxCmd, ['expo', 'start', `--${expoMode}`], {
-      cwd: mobileDir,
-      env: {
-        ...process.env,
-        EXPO_PUBLIC_BRIDGE_URL: bridgeUrl,
-        EXPO_PUBLIC_BRIDGE_API_KEY: apiKey,
-      },
-    });
+    await runCommand(npxCmd, expoArgs, { cwd: mobileDir, env: expoEnv });
   } finally {
     if (!bridgeProcess.killed) {
       bridgeProcess.kill('SIGTERM');
