@@ -7,6 +7,10 @@ const BRIDGE_URL_KEY = 'codex_bridge_url';
 const BRIDGE_API_KEY_KEY = 'codex_bridge_api_key';
 const CLIENT_ID_KEY = 'codex_client_id';
 const AGENTS_KEY = 'codex_agents';
+const ENV_BRIDGE_URL = (process.env.EXPO_PUBLIC_BRIDGE_URL || '').trim();
+const ENV_BRIDGE_API_KEY = (process.env.EXPO_PUBLIC_BRIDGE_API_KEY || '').trim();
+const DEFAULT_BRIDGE_URL = ENV_BRIDGE_URL || 'ws://localhost:3001';
+const DEFAULT_BRIDGE_API_KEY = ENV_BRIDGE_API_KEY;
 
 interface AgentStore {
   agents: Agent[];
@@ -114,8 +118,8 @@ function dedupeAgents(agents: Agent[]): Agent[] {
 export const useAgentStore = create<AgentStore>((set, get) => ({
   agents: [],
   connectionStatus: 'disconnected',
-  bridgeUrl: 'ws://localhost:3001',
-  bridgeApiKey: '',
+  bridgeUrl: DEFAULT_BRIDGE_URL,
+  bridgeApiKey: DEFAULT_BRIDGE_API_KEY,
   clientId: '',
   urlLoaded: false,
   agentsLoaded: false,
@@ -140,8 +144,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     const savedApiKey = await AsyncStorage.getItem(BRIDGE_API_KEY_KEY);
     const savedClientId = await AsyncStorage.getItem(CLIENT_ID_KEY);
 
-    const bridgeUrl = convexSettings?.bridgeUrl || saved || 'ws://localhost:3001';
-    const bridgeApiKey = convexSettings?.apiKey || savedApiKey || '';
+    const bridgeUrl = ENV_BRIDGE_URL || convexSettings?.bridgeUrl || saved || DEFAULT_BRIDGE_URL;
+    const bridgeApiKey = ENV_BRIDGE_API_KEY || convexSettings?.apiKey || savedApiKey || DEFAULT_BRIDGE_API_KEY;
     const clientId = savedClientId || createClientId();
 
     set({ bridgeUrl, bridgeApiKey, clientId, urlLoaded: true });

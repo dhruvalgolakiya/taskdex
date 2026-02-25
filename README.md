@@ -25,6 +25,41 @@ The **bridge server** runs on your Mac/PC alongside the Codex CLI. The **mobile 
 - **iOS device** or Android device (for push notifications and Live Activity, a physical device is required)
 - Both your computer and phone on the **same network** (or connected via [Tailscale](https://tailscale.com) for remote access)
 
+## Install via npm (Easiest)
+
+After publishing this package to npm, users can install and launch with:
+
+```bash
+npm i -g taskdex
+taskdex init
+```
+
+This will clone the repo and immediately run interactive terminal setup.
+
+For an already-cloned repo:
+
+```bash
+npx taskdex setup
+```
+
+## One-Command Terminal Setup (Recommended)
+
+Use this flow for first-time setup with terminal prompts for bridge values, automatic dependency install, and an Expo QR code at the end:
+
+```bash
+git clone <your-repo-url> codex-mobile
+cd codex-mobile
+node scripts/setup-and-start.mjs
+```
+
+What this script does:
+
+- prompts for `PORT`, `API key`, and Expo mode (`lan` or `tunnel`)
+- installs dependencies in `bridge-server` and `mobile`
+- starts the bridge server with your chosen values
+- starts Expo and prints the QR code to open the app
+- injects bridge URL and API key into Expo so the app opens pre-configured
+
 ## Bridge Server
 
 The bridge server spawns and manages `codex app-server` child processes, exposing them over a WebSocket API.
