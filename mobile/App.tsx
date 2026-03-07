@@ -4,13 +4,10 @@ import {
   Text,
   FlatList,
   Pressable,
-  Modal,
-  TextInput,
   StyleSheet,
   Alert,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   useColorScheme,
   AppState,
   Share,
@@ -24,11 +21,10 @@ import { StatusBar } from 'expo-status-bar';
 import { registerRootComponent } from 'expo';
 import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
-import { Ionicons } from '@expo/vector-icons';
 import { ConvexProvider, useQuery } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import {
   Manrope_400Regular,
@@ -47,14 +43,29 @@ import { useWebSocket, sendMessageToAgent, sendRequest } from './hooks/useWebSoc
 import { ChatBubble } from './components/ChatBubble';
 import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
-import { TypingIndicator } from './components/TypingIndicator';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
+import { WorkspaceSidebar } from './components/workspace/WorkspaceSidebar';
+import { OnboardingModal } from './components/workspace/OnboardingModal';
+import { CreateWorkspaceModal } from './components/workspace/CreateWorkspaceModal';
+import { DirectoryPickerModal } from './components/workspace/DirectoryPickerModal';
+import { RepoManagerModal } from './components/workspace/RepoManagerModal';
+import { CreateThreadModal } from './components/workspace/CreateThreadModal';
+import { FileBrowserModal } from './components/workspace/FileBrowserModal';
+import { GitModal } from './components/workspace/GitModal';
+import { ExecRunnerModal } from './components/workspace/ExecRunnerModal';
+import { AgentDashboardModal } from './components/workspace/AgentDashboardModal';
+import { UsageAnalyticsModal } from './components/workspace/UsageAnalyticsModal';
+import { NotificationsModal } from './components/workspace/NotificationsModal';
+import { QrScannerModal } from './components/workspace/QrScannerModal';
+import { SettingsModal } from './components/workspace/SettingsModal';
+import { EditAgentModal } from './components/workspace/EditAgentModal';
+import { EditQueuedMessageModal } from './components/workspace/EditQueuedMessageModal';
+import { WorkspaceHeader } from './components/workspace/WorkspaceHeader';
+import { WorkspaceConversation } from './components/workspace/WorkspaceConversation';
+import { WorkspaceMoreMenuModal } from './components/workspace/WorkspaceMoreMenuModal';
 import { setWidgetSummary, clearWidgetSummary } from 'taskdex-widget-bridge';
 import type { Agent, AgentMessage, QueuedMessage, AgentTemplate } from './types';
 import { api } from './convex/_generated/api';
-import SyntaxHighlighter from 'react-native-syntax-highlighter';
-import atomOneDark from 'react-syntax-highlighter/styles/hljs/atom-one-dark';
-import atomOneLight from 'react-syntax-highlighter/styles/hljs/atom-one-light';
 import {
   convexClient,
   fetchThreadMessages,
@@ -63,6 +74,19 @@ import {
   persistThreadRecord,
   persistTemplateRecord,
 } from './lib/convexClient';
+import type {
+  DashboardAgentRow,
+  ExecModeType,
+  ExecPreset,
+  ExecRunRecord,
+  GitStatusInfo,
+  NotificationHistoryEntry,
+  NotificationLevel,
+  WorkspaceApprovalPolicy,
+  WorkspaceFileEntry,
+  WorkspaceSearchResult,
+} from './features/workspace/types';
+import { useWorkspaceRepoDirectory } from './features/workspace/hooks/useWorkspaceRepoDirectory';
 import {
   getConnectionColors,
   getPalette,
@@ -110,12 +134,6 @@ function getConnectionLabel(status: string) {
   if (status === 'connected') return 'Connected to bridge';
   if (status === 'connecting') return 'Connecting to bridge...';
   return 'Disconnected from bridge';
-}
-
-function formatNotificationTimestamp(value: number): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString();
 }
 
 function extractThreadIdFromUrl(url: string): string | null {
@@ -173,20 +191,6 @@ function toUserErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function guessLanguageFromPath(filePath: string): string {
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
-  if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript';
-  if (lower.endsWith('.json')) return 'json';
-  if (lower.endsWith('.md')) return 'markdown';
-  if (lower.endsWith('.py')) return 'python';
-  if (lower.endsWith('.sh')) return 'bash';
-  if (lower.endsWith('.yml') || lower.endsWith('.yaml')) return 'yaml';
-  if (lower.endsWith('.css')) return 'css';
-  if (lower.endsWith('.html')) return 'html';
-  return 'text';
-}
-
 const BUILT_IN_TEMPLATES: AgentTemplate[] = [
   {
     id: 'builtin_bug_fixer',
@@ -221,37 +225,6 @@ const MODEL_OPTIONS = ['gpt-5.1-codex', 'gpt-5-codex', 'gpt-4.1'];
 const EXEC_PRESETS_KEY = 'taskdex_exec_presets_v1';
 const EXEC_RUNS_KEY = 'taskdex_exec_runs_v1';
 
-type ExecModeType = 'task' | 'flow';
-type ExecRunStatus = 'starting' | 'running' | 'completed' | 'failed';
-
-interface ExecPreset {
-  id: string;
-  name: string;
-  mode: ExecModeType;
-  prompt: string;
-  steps: string[];
-  model: string;
-  cwd: string;
-  approvalPolicy: 'never' | 'on-request';
-  systemPrompt: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-interface ExecRunRecord {
-  id: string;
-  presetId?: string;
-  name: string;
-  mode: ExecModeType;
-  status: ExecRunStatus;
-  stepCount: number;
-  startedAt: number;
-  finishedAt?: number;
-  threadId?: string;
-  workspaceId?: string;
-  error?: string;
-}
-
 function createExecId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -261,13 +234,6 @@ function parseFlowSteps(raw: string): string[] {
     .split('\n')
     .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
     .filter((line) => line.length > 0);
-}
-
-function formatExecRunTime(timestamp?: number): string {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString();
 }
 
 function messageIdentity(message: AgentMessage): string {
@@ -355,7 +321,6 @@ function WorkspaceScreen({
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showCreateThread, setShowCreateThread] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [onboardingStep, setOnboardingStep] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [qrScanEnabled, setQrScanEnabled] = useState(true);
@@ -376,21 +341,11 @@ function WorkspaceScreen({
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [newWorkspaceModel, setNewWorkspaceModel] = useState('gpt-5.1-codex');
   const [newWorkspaceCwd, setNewWorkspaceCwd] = useState('/Users/apple/Work/DhruvalPersonal');
-  const [newWorkspaceApprovalPolicy, setNewWorkspaceApprovalPolicy] = useState<'never' | 'on-request'>('never');
+  const [newWorkspaceApprovalPolicy, setNewWorkspaceApprovalPolicy] = useState<WorkspaceApprovalPolicy>('never');
   const [newWorkspaceSystemPrompt, setNewWorkspaceSystemPrompt] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState(BUILT_IN_TEMPLATES[0].id);
   const [customTemplateName, setCustomTemplateName] = useState('');
   const [savingTemplate, setSavingTemplate] = useState(false);
-  const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
-  const [directoryEntries, setDirectoryEntries] = useState<Array<{ name: string; path: string }>>([]);
-  const [directoryPath, setDirectoryPath] = useState('.');
-  const [directoryResolvedCwd, setDirectoryResolvedCwd] = useState('');
-  const [loadingDirectories, setLoadingDirectories] = useState(false);
-  const [showRepoManager, setShowRepoManager] = useState(false);
-  const [repoEntries, setRepoEntries] = useState<Array<{ name: string; path: string; remote?: string }>>([]);
-  const [loadingRepos, setLoadingRepos] = useState(false);
-  const [cloneRepoUrl, setCloneRepoUrl] = useState('');
-  const [cloningRepo, setCloningRepo] = useState(false);
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const createWorkspaceInFlight = useRef(false);
 
@@ -407,6 +362,33 @@ function WorkspaceScreen({
   const [modelInput, setModelInput] = useState('');
   const [cwdInput, setCwdInput] = useState('');
   const [savingModel, setSavingModel] = useState(false);
+  const {
+    showDirectoryPicker,
+    directoryEntries,
+    directoryPath,
+    loadingDirectories,
+    openDirectoryPicker,
+    closeDirectoryPicker,
+    navigateDirectoryUp,
+    navigateToDirectory,
+    confirmDirectorySelection,
+    showRepoManager,
+    repoEntries,
+    loadingRepos,
+    cloneRepoUrl,
+    setCloneRepoUrl,
+    cloningRepo,
+    openRepoManager,
+    closeRepoManager,
+    handleCloneRepo,
+    handlePullRepo,
+    useRepoForWorkspace,
+  } = useWorkspaceRepoDirectory({
+    sendRequest,
+    mapError: toUserErrorMessage,
+    onSelectWorkspaceDirectory: setNewWorkspaceCwd,
+    onSelectAgentDirectory: setCwdInput,
+  });
   const [queueCollapsed, setQueueCollapsed] = useState(false);
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -418,37 +400,21 @@ function WorkspaceScreen({
   } | null>(null);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const [fileBrowserPath, setFileBrowserPath] = useState('.');
-  const [fileEntries, setFileEntries] = useState<Array<{ name: string; path: string; type: string }>>([]);
+  const [fileEntries, setFileEntries] = useState<WorkspaceFileEntry[]>([]);
   const [loadingFileEntries, setLoadingFileEntries] = useState(false);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [selectedFileContent, setSelectedFileContent] = useState('');
   const [loadingFileContent, setLoadingFileContent] = useState(false);
   const [fileBrowserError, setFileBrowserError] = useState<string | null>(null);
   const [showGitModal, setShowGitModal] = useState(false);
-  const [gitStatus, setGitStatus] = useState<{
-    branch: string;
-    isClean: boolean;
-    modified: string[];
-    notAdded: string[];
-    deleted: string[];
-    created: string[];
-  } | null>(null);
+  const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null);
   const [gitDiff, setGitDiff] = useState('');
   const [gitBranches, setGitBranches] = useState<string[]>([]);
   const [loadingGit, setLoadingGit] = useState(false);
   const [committingGit, setCommittingGit] = useState(false);
   const [loadingNotifications, setLoadingNotifications] = useState(false);
-  const [notificationPrefs, setNotificationPrefs] = useState<Record<string, 'all' | 'errors' | 'muted'>>({});
-  const [notificationHistory, setNotificationHistory] = useState<Array<{
-    id: string;
-    timestamp: number;
-    agentId: string;
-    title: string;
-    body: string;
-    severity: 'info' | 'error';
-    status: 'sent' | 'muted' | 'no_tokens' | 'error';
-    deliveredCount: number;
-  }>>([]);
+  const [notificationPrefs, setNotificationPrefs] = useState<Record<string, NotificationLevel>>({});
+  const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryEntry[]>([]);
   const [failedSend, setFailedSend] = useState<{ text: string; error: string } | null>(null);
   const [workspaceGraphEnabled, setWorkspaceGraphEnabled] = useState(false);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
@@ -876,7 +842,6 @@ function WorkspaceScreen({
         if (cancelled) return;
         if (value !== 'done') {
           setShowOnboarding(true);
-          setOnboardingStep(0);
         }
       })
       .catch(() => {});
@@ -1368,20 +1333,22 @@ function WorkspaceScreen({
     }
   }, [newWorkspaceName]);
 
-  const loadDirectoryOptions = useCallback(async (targetPath: string) => {
+  const loadDirectoryOptions = useCallback(async (targetPath: string, baseCwdOverride?: string) => {
+    const browseCwd = baseCwdOverride?.trim() || directoryBaseCwd.trim() || '.';
     setLoadingDirectories(true);
     try {
       const res = await sendRequest('list_directories', {
-        cwd: newWorkspaceCwd.trim() || '.',
+        cwd: browseCwd,
         path: targetPath,
       });
       if (res.type !== 'response' || !res.data) {
         throw new Error(res.error || 'Failed to list directories');
       }
-      const payload = res.data as { entries?: Array<{ name: string; path: string }>; cwd?: string; path?: string };
+      const payload = res.data as { entries?: WorkspaceDirectoryEntry[]; cwd?: string; path?: string };
       const responsePath = payload.path || targetPath || '.';
-      const baseCwd = payload.cwd || newWorkspaceCwd.trim() || '.';
+      const baseCwd = payload.cwd || browseCwd;
       const normalizedPath = responsePath === '.' ? '' : responsePath.replace(/^\.\//, '');
+      setDirectoryBaseCwd(baseCwd);
       setDirectoryResolvedCwd(normalizedPath ? `${baseCwd.replace(/\/$/, '')}/${normalizedPath}` : baseCwd);
       setDirectoryPath(responsePath);
       setDirectoryEntries(payload.entries || []);
@@ -1391,7 +1358,16 @@ function WorkspaceScreen({
     } finally {
       setLoadingDirectories(false);
     }
-  }, [newWorkspaceCwd]);
+  }, [directoryBaseCwd]);
+
+  const openDirectoryPicker = useCallback((cwd: string, target: 'workspace' | 'agent') => {
+    const nextBaseCwd = cwd.trim() || '.';
+    setDirectorySelectionTarget(target);
+    setDirectoryBaseCwd(nextBaseCwd);
+    setDirectoryResolvedCwd(nextBaseCwd);
+    setShowDirectoryPicker(true);
+    void loadDirectoryOptions('.', nextBaseCwd);
+  }, [loadDirectoryOptions]);
 
   const refreshRepoEntries = useCallback(async () => {
     setLoadingRepos(true);
@@ -1667,11 +1643,20 @@ function WorkspaceScreen({
   const completeOnboarding = useCallback((openCreateAgent: boolean) => {
     AsyncStorage.setItem(ONBOARDING_DONE_KEY, 'done').catch(() => {});
     setShowOnboarding(false);
-    setOnboardingStep(0);
     if (openCreateAgent) {
       setShowCreateWorkspace(true);
     }
   }, []);
+
+  const handleConfirmDirectoryPickerSelection = useCallback(() => {
+    const selected = directoryResolvedCwd || directoryBaseCwd;
+    if (directorySelectionTarget === 'agent') {
+      setCwdInput(selected);
+    } else {
+      setNewWorkspaceCwd(selected);
+    }
+    setShowDirectoryPicker(false);
+  }, [directoryBaseCwd, directoryResolvedCwd, directorySelectionTarget]);
 
   const handleOpenQrScanner = useCallback(async () => {
     const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission();
@@ -1790,6 +1775,11 @@ function WorkspaceScreen({
     setEditingQueueItem(null);
     setEditingQueueText('');
   };
+
+  const closeQueuedMessageEditor = useCallback(() => {
+    setEditingQueueItem(null);
+    setEditingQueueText('');
+  }, []);
 
   const handleSendNextQueued = async () => {
     if (!activeAgent) return;
@@ -2098,6 +2088,20 @@ function WorkspaceScreen({
     if (lastAgentMessage?.type === 'command' || lastAgentMessage?.type === 'command_output') return 'Running';
     return 'Typing';
   }, [activeAgent]);
+  const headerSubtitle = activeWorkspace
+    ? `${activeWorkspace.name} · ${activeThread?.title || 'No thread'}`
+    : 'No workspace selected';
+  const metaText = activeWorkspace
+    ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}${gitStatus?.branch ? ` • ${gitStatus.branch} ${gitStatus.isClean ? 'clean' : 'dirty'}` : ''}`
+    : getConnectionLabel(connectionStatus);
+  const offlineBannerText = connectionStatus !== 'connected'
+    ? `Bridge offline. New messages will queue locally${offlineQueuedCount > 0 ? ` (${offlineQueuedCount} queued)` : ''}.`
+    : null;
+  const searchResults = useMemo(
+    () => ((globalSearchResults || []) as WorkspaceSearchResult[]),
+    [globalSearchResults],
+  );
+  const showSearchResults = searchScope === 'all' && searchQuery.trim().length >= 2;
   const threadLabelById = useMemo(() => {
     const labels = new Map<string, string>();
     for (const workspace of workspaces) {
@@ -2315,213 +2319,112 @@ function WorkspaceScreen({
     return () => clearTimeout(timer);
   }, [activeThreadId, activeAgent?.messages.length, showActivity]);
 
+  const toggleSearchScope = useCallback(() => {
+    setSearchScope((scope) => (scope === 'thread' ? 'all' : 'thread'));
+  }, []);
+
+  const toggleActivityVisibility = useCallback(() => {
+    setShowActivity((current) => !current);
+  }, []);
+
+  const handleConversationContentSizeChange = useCallback(() => {
+    if (isNearBottomRef.current) {
+      listRef.current?.scrollToEnd({ animated: false });
+    }
+  }, []);
+
+  const handleConversationScroll = useCallback((event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const isNearBottom = contentOffset.y + layoutMeasurement.height >= contentSize.height - 28;
+    isNearBottomRef.current = isNearBottom;
+    if (activeThreadId) {
+      threadScrollState.current = {
+        ...threadScrollState.current,
+        [activeThreadId]: {
+          ...threadScrollState.current[activeThreadId],
+          offset: contentOffset.y,
+          atBottom: isNearBottom,
+        },
+      };
+    }
+    setShowScrollToBottom((current) => (current === !isNearBottom ? current : !isNearBottom));
+    if (contentOffset.y <= 80) {
+      void loadOlderMessages();
+    }
+  }, [activeThreadId, loadOlderMessages]);
+
+  const handleConversationScrollToIndexFailed = useCallback((info: any) => {
+    listRef.current?.scrollToOffset({
+      offset: Math.max(0, info.averageItemLength * info.index),
+      animated: true,
+    });
+  }, []);
+
+  const handleScrollToBottom = useCallback(() => {
+    isNearBottomRef.current = true;
+    setShowScrollToBottom(false);
+    listRef.current?.scrollToEnd({ animated: true });
+  }, []);
+
+  const moreMenuItems = useMemo(() => ([
+    { icon: 'folder-outline' as const, label: 'Files', onPress: () => { setShowMoreMenu(false); handleOpenFileBrowser(); }, disabled: !activeWorkspace },
+    { icon: 'git-branch-outline' as const, label: 'Git', onPress: () => { setShowMoreMenu(false); setShowGitModal(true); void refreshGitInfo(); }, disabled: !activeWorkspace },
+    { icon: 'people-outline' as const, label: 'Agents', onPress: () => { setShowMoreMenu(false); setShowAgentDashboard(true); } },
+    { icon: 'bar-chart-outline' as const, label: 'Usage', onPress: () => { setShowMoreMenu(false); setShowUsageModal(true); } },
+    { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => { setShowMoreMenu(false); setShowNotificationsModal(true); } },
+    { icon: 'flash-outline' as const, label: 'Exec Mode', onPress: openExecRunner },
+    { icon: 'build-outline' as const, label: 'Agent Config', onPress: () => { setShowMoreMenu(false); setShowEditModel(true); }, disabled: !activeAgent },
+  ]), [activeAgent, activeWorkspace, handleOpenFileBrowser, openExecRunner, refreshGitInfo]);
+
   return (
     <KeyboardAvoidingView
       style={s.screenRoot}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
     >
-      <View style={s.topBar}>
-        <View style={s.topLeft}>
-          <Pressable style={s.menuBtn} onPress={openSidebar}>
-            <Ionicons name="chatbubbles-outline" size={16} color={colors.background} />
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            <Text style={s.headerTitle}>Taskdex</Text>
-            <Text style={s.topSub} numberOfLines={1}>
-              {activeWorkspace ? `${activeWorkspace.name} · ${activeThread?.title || 'No thread'}` : 'No workspace selected'}
-            </Text>
-          </View>
-        </View>
-        <View style={s.topActions}>
-          <View style={[s.connectionDot, { backgroundColor: connectionColor }]} />
-          <Pressable onPress={() => setShowSettings(true)} style={({ pressed }) => [s.headerIconBtn, pressed && s.pressed]}>
-            <Ionicons name="settings-outline" size={18} color={colors.textPrimary} />
-          </Pressable>
-          <Pressable onPress={() => setShowMoreMenu(true)} style={({ pressed }) => [s.headerIconBtn, pressed && s.pressed]}>
-            <Ionicons name="ellipsis-horizontal" size={18} color={colors.textPrimary} />
-          </Pressable>
-        </View>
-      </View>
+      <WorkspaceHeader
+        styles={s}
+        colors={colors}
+        headerSubtitle={headerSubtitle}
+        connectionColor={connectionColor}
+        statusColor={statusColor}
+        metaText={metaText}
+        offlineBannerText={offlineBannerText}
+        searchQuery={searchQuery}
+        searchScope={searchScope}
+        searchResults={searchResults}
+        showSearchResults={showSearchResults}
+        onOpenSidebar={openSidebar}
+        onOpenSettings={() => setShowSettings(true)}
+        onOpenMoreMenu={() => setShowMoreMenu(true)}
+        onChangeSearchQuery={setSearchQuery}
+        onToggleSearchScope={toggleSearchScope}
+        onOpenSearchResult={handleOpenSearchResult}
+      />
 
-      <View style={s.searchRow}>
-        <Ionicons name="search" size={14} color={colors.textMuted} />
-        <TextInput
-          style={s.searchInput}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder={searchScope === 'thread' ? 'Search this thread' : 'Search all threads'}
-          placeholderTextColor={colors.textMuted}
-          autoCapitalize="none"
-          autoCorrect={false}
-        />
-        <Pressable
-          style={s.searchScopeChip}
-          onPress={() => setSearchScope((scope) => (scope === 'thread' ? 'all' : 'thread'))}
-        >
-          <Text style={s.searchScopeText}>{searchScope === 'thread' ? 'Thread' : 'All'}</Text>
-        </Pressable>
-      </View>
-
-      <Text style={[s.metaInline, { color: statusColor }]} numberOfLines={1}>
-        {activeWorkspace
-          ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}${gitStatus?.branch ? ` • ${gitStatus.branch} ${gitStatus.isClean ? 'clean' : 'dirty'}` : ''}`
-          : getConnectionLabel(connectionStatus)}
-      </Text>
-      {connectionStatus !== 'connected' && (
-        <View style={s.offlineBanner}>
-          <Text style={s.offlineBannerText}>
-            Bridge offline. New messages will queue locally{offlineQueuedCount > 0 ? ` (${offlineQueuedCount} queued)` : ''}.
-          </Text>
-        </View>
-      )}
-
-      {searchScope === 'all' && searchQuery.trim().length >= 2 && (
-        <View style={s.searchResultsPanel}>
-          {(globalSearchResults || []).slice(0, 8).map((result: any, index: number) => (
-            <Pressable
-              key={`${result.id || result.threadId}_${result.timestamp}_${index}`}
-              style={s.searchResultRow}
-              onPress={() => handleOpenSearchResult({
-                threadId: result.threadId,
-                timestamp: result.timestamp,
-                itemId: result.itemId,
-              })}
-            >
-              <Text style={s.searchResultTitle} numberOfLines={1}>
-                {(result.text || '').replace(/\s+/g, ' ').trim() || '(empty message)'}
-              </Text>
-              <Text style={s.searchResultMeta} numberOfLines={1}>
-                {result.threadId}
-              </Text>
-            </Pressable>
-          ))}
-          {globalSearchResults && globalSearchResults.length === 0 && (
-            <Text style={s.searchEmptyText}>No cross-thread results</Text>
-          )}
-        </View>
-      )}
-
-      <View style={s.chatPanel}>
-        {!activeAgent ? (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyCard}>
-              <Text style={s.emptyTitle}>No Thread Selected</Text>
-              <Text style={s.emptySub}>Create an agent, then start a thread.</Text>
-            </View>
-          </View>
-        ) : isThreadHydrating ? (
-          <View style={s.skeletonWrap}>
-            <View style={s.skeletonBubbleWide} />
-            <View style={s.skeletonBubbleMid} />
-            <View style={s.skeletonBubbleShort} />
-          </View>
-        ) : !hasAnyMessages && isAgentWorking ? (
-          <View style={s.emptyWrap}>
-            <TypingIndicator label={typingLabel} colors={colors} />
-          </View>
-        ) : !hasAnyMessages ? (
-          <View style={s.emptyWrap}>
-            <View style={s.emptyCard}>
-              <Text style={s.emptyTitle}>Start Chatting</Text>
-              <Text style={s.emptySub}>Each thread keeps its own context.</Text>
-            </View>
-          </View>
-        ) : (
-          <FlatList
-            ref={listRef}
-            data={visibleMessages}
-            keyExtractor={keyExtractor}
-            renderItem={renderChatItem}
-            getItemLayout={(_, index) => ({ length: 104, offset: 104 * index, index })}
-            ListHeaderComponent={loadingMoreMessages || activityCount > 0 ? (
-              <View>
-                {loadingMoreMessages && (
-                  <View style={s.paginationLoadingWrap}>
-                    <Text style={s.paginationLoadingText}>Loading older messages...</Text>
-                  </View>
-                )}
-                {activityCount > 0 && (
-                  <View style={s.thinkingToggleWrap}>
-                    <Pressable
-                      style={s.thinkingToggleBtn}
-                      onPress={() => setShowActivity((current) => !current)}
-                    >
-                      <Ionicons
-                        name={showActivity ? 'chevron-down' : 'chevron-forward'}
-                        size={14}
-                        color={colors.textSecondary}
-                      />
-                      <Text style={s.thinkingToggleText}>
-                        {showActivity ? `Hide activity (${activityCount})` : `Show activity (${activityCount})`}
-                      </Text>
-                    </Pressable>
-                  </View>
-                )}
-              </View>
-            ) : null}
-            ListEmptyComponent={!showActivity && activityCount > 0 ? (
-              <View style={s.thinkingCollapsedEmpty}>
-                <Text style={s.thinkingCollapsedTitle}>Activity is collapsed</Text>
-                <Text style={s.thinkingCollapsedSub}>Expand to inspect thinking, commands, and outputs.</Text>
-              </View>
-            ) : null}
-            ListFooterComponent={isAgentWorking ? <TypingIndicator label={typingLabel} colors={colors} /> : null}
-            contentContainerStyle={s.chatListContent}
-            onContentSizeChange={() => {
-              if (isNearBottomRef.current) {
-                listRef.current?.scrollToEnd({ animated: false });
-              }
-            }}
-            onScroll={(event) => {
-              const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-              const isNearBottom = contentOffset.y + layoutMeasurement.height >= contentSize.height - 28;
-              isNearBottomRef.current = isNearBottom;
-              if (activeThreadId) {
-                threadScrollState.current = {
-                  ...threadScrollState.current,
-                  [activeThreadId]: {
-                    ...threadScrollState.current[activeThreadId],
-                    offset: contentOffset.y,
-                    atBottom: isNearBottom,
-                  },
-                };
-              }
-              setShowScrollToBottom((current) => (current === !isNearBottom ? current : !isNearBottom));
-              if (contentOffset.y <= 80) {
-                void loadOlderMessages();
-              }
-            }}
-            windowSize={9}
-            initialNumToRender={12}
-            maxToRenderPerBatch={8}
-            updateCellsBatchingPeriod={32}
-            removeClippedSubviews={true}
-            scrollEventThrottle={16}
-            onScrollToIndexFailed={(info) => {
-              listRef.current?.scrollToOffset({
-                offset: Math.max(0, info.averageItemLength * info.index),
-                animated: true,
-              });
-            }}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          />
-        )}
-      </View>
-
-      {showScrollToBottom && !!activeAgent && (
-        <Pressable
-          style={[s.scrollToBottomBtn, { bottom: bottomInset + 70 }]}
-          onPress={() => {
-            isNearBottomRef.current = true;
-            setShowScrollToBottom(false);
-            listRef.current?.scrollToEnd({ animated: true });
-          }}
-        >
-          <Ionicons name="chevron-down" size={18} color={colors.background} />
-        </Pressable>
-      )}
+      <WorkspaceConversation
+        styles={s}
+        colors={colors}
+        listRef={listRef}
+        hasActiveAgent={!!activeAgent}
+        isThreadHydrating={isThreadHydrating}
+        hasAnyMessages={hasAnyMessages}
+        isAgentWorking={!!isAgentWorking}
+        typingLabel={typingLabel}
+        visibleMessages={visibleMessages}
+        loadingMoreMessages={loadingMoreMessages}
+        activityCount={activityCount}
+        showActivity={showActivity}
+        renderChatItem={renderChatItem}
+        keyExtractor={keyExtractor}
+        onToggleActivity={toggleActivityVisibility}
+        onContentSizeChange={handleConversationContentSizeChange}
+        onScroll={handleConversationScroll}
+        onScrollToIndexFailed={handleConversationScrollToIndexFailed}
+        showScrollToBottom={showScrollToBottom}
+        bottomInset={bottomInset}
+        onScrollToBottom={handleScrollToBottom}
+      />
 
       {!!activeAgent && queuedCount > 0 && (
         <QueuePanel
@@ -2566,1320 +2469,311 @@ function WorkspaceScreen({
         colors={colors}
       />
 
-      {showSidebar && (
-        <View style={s.sidebarOverlay}>
-          <View style={[s.sidebar, { paddingBottom: insets.bottom }]}>
-            <View style={s.sidebarHeader}>
-              <Text style={s.sidebarTitle}>Chats</Text>
-              <Pressable style={s.sidebarCloseBtn} onPress={closeSidebar}>
-                <Ionicons name="close" size={16} color={colors.textSecondary} />
-              </Pressable>
-            </View>
+      <WorkspaceSidebar
+        visible={showSidebar}
+        styles={s}
+        colors={colors}
+        insetsBottom={insets.bottom}
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspace?.id || null}
+        activeThreadId={activeThreadId}
+        expandedWorkspaceId={expandedWorkspaceId}
+        onSetExpandedWorkspaceId={setExpandedWorkspaceId}
+        onSelectWorkspace={setActiveWorkspace}
+        onSelectThread={setActiveThread}
+        onRequestCreateWorkspace={() => setShowCreateWorkspace(true)}
+        onRequestCreateThread={() => setShowCreateThread(true)}
+        onDeleteWorkspace={handleDeleteWorkspace}
+        onRemoveThread={handleRemoveThread}
+        onClose={closeSidebar}
+      />
 
-            <ScrollView style={s.sidebarContent} showsVerticalScrollIndicator={false}>
-              <View style={s.sidebarSection}>
-                <View style={s.sidebarSectionHeader}>
-                  <Text style={s.sidebarSectionTitle}>Agents</Text>
-                  <Pressable style={s.linkActionBtn} onPress={() => setShowCreateWorkspace(true)}>
-                    <Text style={s.linkActionText}>+ New</Text>
-                  </Pressable>
-                </View>
-                {workspaces.map((workspace) => {
-                  const isActive = workspace.id === activeWorkspace?.id;
-                  const isExpanded = expandedWorkspaceId === workspace.id;
-                  return (
-                    <View key={workspace.id} style={[s.workspaceCard, isActive && s.workspaceCardActive]}>
-                      <View style={s.workspaceCardHeader}>
-                        <Pressable
-                          style={s.workspaceMainPress}
-                          onPress={() => {
-                            setActiveWorkspace(workspace.id);
-                            setExpandedWorkspaceId(workspace.id);
-                          }}
-                        >
-                          <View style={s.sidebarItemRow}>
-                            <View style={s.sidebarItemTextWrap}>
-                              <Text style={[s.sidebarItemText, isActive && s.sidebarItemTextActive]} numberOfLines={1}>
-                                {workspace.name}
-                              </Text>
-                              <Text style={[s.sidebarItemMeta, isActive && s.sidebarItemMetaActive]} numberOfLines={1}>
-                                {workspace.model} • {workspace.threads.length} threads
-                              </Text>
-                            </View>
-                          </View>
-                        </Pressable>
-                        <View style={s.workspaceActions}>
-                          <Pressable
-                            style={({ pressed }) => [s.sidebarIconBtn, pressed && s.pressed]}
-                            onPress={() => {
-                              setActiveWorkspace(workspace.id);
-                              setExpandedWorkspaceId(workspace.id);
-                              setShowCreateThread(true);
-                            }}
-                            hitSlop={6}
-                          >
-                            <Ionicons name="add" size={14} color={colors.accent} />
-                          </Pressable>
-                          <Pressable
-                            style={({ pressed }) => [s.sidebarDeleteBtn, pressed && s.pressed]}
-                            onPress={() => handleDeleteWorkspace(workspace.id, workspace.name)}
-                            hitSlop={6}
-                          >
-                            <Ionicons
-                              name="trash-outline"
-                              size={14}
-                              color={isActive ? colors.accent : colors.textMuted}
-                            />
-                          </Pressable>
-                          <Pressable
-                            style={({ pressed }) => [s.sidebarIconBtn, pressed && s.pressed]}
-                            onPress={() =>
-                              setExpandedWorkspaceId((current) => (current === workspace.id ? null : workspace.id))
-                            }
-                            hitSlop={6}
-                          >
-                            <Ionicons
-                              name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                              size={14}
-                              color={isActive ? colors.accent : colors.textMuted}
-                            />
-                          </Pressable>
-                        </View>
-                      </View>
+      <OnboardingModal
+        visible={showOnboarding}
+        styles={s}
+        colors={colors}
+        bridgeStartCommand={BRIDGE_START_COMMAND}
+        urlInput={urlInput}
+        apiKeyInput={apiKeyInput}
+        bridgeHealth={bridgeHealth}
+        checkingHealth={checkingHealth}
+        onChangeUrlInput={setUrlInput}
+        onChangeApiKeyInput={setApiKeyInput}
+        onCheckHealth={() => void handleCheckBridgeHealth()}
+        onSkip={() => completeOnboarding(false)}
+        onComplete={() => {
+          handleSaveBridgeUrl();
+          completeOnboarding(true);
+        }}
+        onClose={() => setShowOnboarding(false)}
+      />
 
-                      {isExpanded && (
-                        <View style={s.threadDropdown}>
-                          {workspace.threads.map((thread) => {
-                            const isThreadActive = isActive && thread.id === activeThreadId;
-                            return (
-                              <Pressable
-                                key={thread.id}
-                                style={[s.threadRow, isThreadActive && s.threadRowActive]}
-                                onPress={() => {
-                                  setActiveWorkspace(workspace.id);
-                                  setActiveThread(workspace.id, thread.id);
-                                  closeSidebar();
-                                }}
-                                onLongPress={() => handleRemoveThread(workspace.id, thread.id, thread.title)}
-                              >
-                                <View style={s.threadRowInner}>
-                                  <View style={s.threadLeft}>
-                                    <View style={[s.threadMarker, isThreadActive && s.threadMarkerActive]} />
-                                    <View style={s.sidebarItemTextWrap}>
-                                      <Text style={[s.threadTitle, isThreadActive && s.sidebarItemTextActive]} numberOfLines={1}>
-                                        {thread.title}
-                                      </Text>
-                                      <Text style={[s.threadMeta, isThreadActive && s.threadMetaActive]} numberOfLines={1}>
-                                        {thread.id.slice(0, 8)}
-                                      </Text>
-                                    </View>
-                                  </View>
-                                </View>
-                              </Pressable>
-                            );
-                          })}
-                          {workspace.threads.length === 0 && <Text style={s.sidebarEmpty}>No threads yet.</Text>}
-                        </View>
-                      )}
-                    </View>
-                  );
-                })}
-                {workspaces.length === 0 && <Text style={s.sidebarEmpty}>No agents yet.</Text>}
-              </View>
-            </ScrollView>
-          </View>
-          <Pressable style={s.sidebarScrim} onPress={closeSidebar} />
-        </View>
-      )}
+      <CreateWorkspaceModal
+        visible={showCreateWorkspace}
+        styles={s}
+        colors={colors}
+        availableTemplates={availableTemplates}
+        modelOptions={MODEL_OPTIONS}
+        selectedTemplateId={selectedTemplateId}
+        newWorkspaceName={newWorkspaceName}
+        newWorkspaceModel={newWorkspaceModel}
+        newWorkspaceCwd={newWorkspaceCwd}
+        newWorkspaceApprovalPolicy={newWorkspaceApprovalPolicy}
+        newWorkspaceSystemPrompt={newWorkspaceSystemPrompt}
+        customTemplateName={customTemplateName}
+        savingTemplate={savingTemplate}
+        creatingWorkspace={creatingWorkspace}
+        connectionStatus={connectionStatus}
+        onApplyTemplate={applyTemplate}
+        onChangeNewWorkspaceName={setNewWorkspaceName}
+        onChangeNewWorkspaceModel={setNewWorkspaceModel}
+        onChangeNewWorkspaceCwd={setNewWorkspaceCwd}
+        onChangeNewWorkspaceApprovalPolicy={setNewWorkspaceApprovalPolicy}
+        onChangeNewWorkspaceSystemPrompt={setNewWorkspaceSystemPrompt}
+        onChangeCustomTemplateName={setCustomTemplateName}
+        onOpenDirectoryPicker={() => openDirectoryPicker(newWorkspaceCwd, 'workspace')}
+        onOpenRepoManager={() => {
+          setShowRepoManager(true);
+          void refreshRepoEntries();
+        }}
+        onSaveCustomTemplate={() => void handleSaveCustomTemplate()}
+        onCreateWorkspace={handleCreateWorkspace}
+        onClose={() => setShowCreateWorkspace(false)}
+      />
 
-      <Modal visible={showOnboarding} transparent={true} animationType="fade" onRequestClose={() => setShowOnboarding(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Welcome to Taskdex</Text>
-            <View style={s.onboardingDots}>
-              {[0, 1, 2].map((step) => (
-                <View key={step} style={[s.onboardingDot, onboardingStep === step && s.onboardingDotActive]} />
-              ))}
-            </View>
+      <DirectoryPickerModal
+        visible={showDirectoryPicker}
+        styles={s}
+        directoryPath={directoryPath}
+        directoryEntries={directoryEntries}
+        loadingDirectories={loadingDirectories}
+        onNavigateUp={() => {
+          if (directoryPath === '.') return;
+          const parent = directoryPath.split('/').slice(0, -1).join('/') || '.';
+          void loadDirectoryOptions(parent);
+        }}
+        onNavigateTo={(path) => {
+          void loadDirectoryOptions(path);
+        }}
+        onConfirmSelection={handleConfirmDirectoryPickerSelection}
+        onClose={() => setShowDirectoryPicker(false)}
+      />
 
-            {onboardingStep === 0 && (
-              <View style={s.onboardingStepWrap}>
-                <Text style={s.onboardingStepTitle}>Control Codex agents from your phone</Text>
-                <Text style={s.onboardingStepBody}>
-                  Taskdex has two parts: this mobile app and a bridge server running where your code lives.
-                </Text>
-                <Text style={s.onboardingStepBody}>
-                  This walkthrough will help you start the bridge, verify connection, and create your first agent.
-                </Text>
-              </View>
-            )}
+      <RepoManagerModal
+        visible={showRepoManager}
+        styles={s}
+        colors={colors}
+        cloneRepoUrl={cloneRepoUrl}
+        cloningRepo={cloningRepo}
+        loadingRepos={loadingRepos}
+        repoEntries={repoEntries}
+        onChangeCloneRepoUrl={setCloneRepoUrl}
+        onCloneRepo={() => void handleCloneRepo()}
+        onRefreshRepos={() => void refreshRepoEntries()}
+        onPullRepo={(repoPath) => void handlePullRepo(repoPath)}
+        onUseRepo={(repoPath) => {
+          setNewWorkspaceCwd(repoPath);
+          setShowRepoManager(false);
+        }}
+        onClose={() => setShowRepoManager(false)}
+      />
 
-            {onboardingStep === 1 && (
-              <View style={s.onboardingStepWrap}>
-                <Text style={s.onboardingStepTitle}>Start the Bridge</Text>
-                <Text style={s.onboardingStepBody}>
-                  Run this command on your computer terminal. It installs dependencies, starts bridge + Expo, and prints the QR to open the app:
-                </Text>
-                <View style={s.onboardingCommandBox}>
-                  <Text style={s.onboardingCommandText}>{BRIDGE_START_COMMAND}</Text>
-                </View>
-                <Pressable
-                  style={s.cancelBtn}
-                  onPress={() => {
-                    void Clipboard.setStringAsync(BRIDGE_START_COMMAND);
-                  }}
-                >
-                  <Text style={s.cancelText}>Copy Command</Text>
-                </Pressable>
-              </View>
-            )}
+      <CreateThreadModal
+        visible={showCreateThread}
+        styles={s}
+        colors={colors}
+        newThreadTitle={newThreadTitle}
+        placeholder={`Thread ${(activeWorkspace?.threads.length || 0) + 1}`}
+        creatingThread={creatingThread}
+        createDisabled={creatingThread || !activeWorkspace}
+        onChangeNewThreadTitle={setNewThreadTitle}
+        onCreateThread={handleCreateThread}
+        onClose={() => setShowCreateThread(false)}
+      />
 
-            {onboardingStep === 2 && (
-              <View style={s.onboardingStepWrap}>
-                <Text style={s.onboardingStepTitle}>Review Connection and Create Your First Agent</Text>
-                <Text style={s.label}>Bridge WebSocket URL</Text>
-                <TextInput
-                  style={s.input}
-                  value={urlInput}
-                  onChangeText={setUrlInput}
-                  placeholder="ws://192.168.1.x:3001"
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                />
-                <Text style={s.label}>Bridge API Key</Text>
-                <TextInput
-                  style={s.input}
-                  value={apiKeyInput}
-                  onChangeText={setApiKeyInput}
-                  placeholder="Paste bridge API key"
-                  placeholderTextColor={colors.textMuted}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  secureTextEntry={true}
-                />
-                <Text style={s.themeHint}>{bridgeHealth}</Text>
-                <Pressable
-                  style={[s.cancelBtn, checkingHealth && s.smallActionBtnDisabled]}
-                  onPress={() => void handleCheckBridgeHealth()}
-                  disabled={checkingHealth}
-                >
-                  <Text style={s.cancelText}>{checkingHealth ? 'Checking...' : 'Test Connection'}</Text>
-                </Pressable>
-              </View>
-            )}
+      <FileBrowserModal
+        visible={showFileBrowser}
+        styles={s}
+        resolvedTheme={resolvedTheme}
+        fileBrowserPath={fileBrowserPath}
+        fileEntries={fileEntries}
+        selectedFilePath={selectedFilePath}
+        selectedFileContent={selectedFileContent}
+        loadingFileEntries={loadingFileEntries}
+        loadingFileContent={loadingFileContent}
+        fileBrowserError={fileBrowserError}
+        modifiedFiles={modifiedFiles}
+        onSelectEntry={(entry) => {
+          if (entry.type === 'directory') {
+            void loadDirectoryEntries(entry.path);
+            return;
+          }
+          void openFilePath(entry.path);
+        }}
+        onBackOrClose={() => {
+          if (selectedFilePath) {
+            setSelectedFilePath(null);
+            setSelectedFileContent('');
+          } else {
+            setShowFileBrowser(false);
+          }
+        }}
+        onPrimaryAction={() => {
+          if (selectedFilePath) {
+            setSelectedFilePath(null);
+            setSelectedFileContent('');
+            return;
+          }
+          void loadDirectoryEntries(fileBrowserPath);
+        }}
+        onClose={() => setShowFileBrowser(false)}
+      />
 
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => completeOnboarding(false)}>
-                <Text style={s.cancelText}>Skip</Text>
-              </Pressable>
-              {onboardingStep > 0 && (
-                <Pressable
-                  style={s.cancelBtn}
-                  onPress={() => setOnboardingStep((step) => Math.max(0, step - 1))}
-                >
-                  <Text style={s.cancelText}>Back</Text>
-                </Pressable>
-              )}
-              {onboardingStep < 2 ? (
-                <Pressable
-                  style={s.primaryBtn}
-                  onPress={() => setOnboardingStep((step) => Math.min(2, step + 1))}
-                >
-                  <Text style={s.primaryText}>Next</Text>
-                </Pressable>
-              ) : (
-                <Pressable
-                  style={[s.primaryBtn, (!urlInput.trim() || !apiKeyInput.trim()) && s.smallActionBtnDisabled]}
-                  disabled={!urlInput.trim() || !apiKeyInput.trim()}
-                  onPress={() => {
-                    handleSaveBridgeUrl();
-                    completeOnboarding(true);
-                  }}
-                >
-                  <Text style={s.primaryText}>Save & Start</Text>
-                </Pressable>
-              )}
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <GitModal
+        visible={showGitModal}
+        styles={s}
+        gitStatus={gitStatus}
+        gitDiff={gitDiff}
+        gitBranches={gitBranches}
+        loadingGit={loadingGit}
+        committingGit={committingGit}
+        onSwitchBranch={(branch) => void handleSwitchBranch(branch)}
+        onRefresh={() => void refreshGitInfo()}
+        onCommit={() => void handleCommitGitChanges()}
+        onClose={() => setShowGitModal(false)}
+      />
 
-      <Modal visible={showCreateWorkspace} transparent={true} animationType="slide" onRequestClose={() => setShowCreateWorkspace(false)}>
-        <KeyboardAvoidingView style={s.createAgentOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.createAgentSheet}>
-            <View style={s.createAgentHeader}>
-              <Text style={s.modalTitle}>New Agent</Text>
-              <Pressable onPress={() => setShowCreateWorkspace(false)} style={s.createAgentClose}>
-                <Ionicons name="close" size={22} color={colors.textMuted} />
-              </Pressable>
-            </View>
-            <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 20 }}>
-              <Text style={s.label}>Template</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.templateRow}>
-                {availableTemplates.map((template) => {
-                  const selected = selectedTemplateId === template.id;
-                  return (
-                    <Pressable
-                      key={template.id}
-                      style={[s.templateChip, selected && s.templateChipActive]}
-                      onPress={() => applyTemplate(template)}
-                    >
-                      <Text style={s.templateChipText}>{template.icon} {template.name}</Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
+      <AgentDashboardModal
+        visible={showAgentDashboard}
+        styles={s}
+        filter={agentDashboardFilter}
+        dashboardAgents={dashboardAgents as DashboardAgentRow[]}
+        onChangeFilter={setAgentDashboardFilter}
+        onOpenThread={handleOpenDashboardThread}
+        onLongPressAgent={handleDashboardLongPress}
+        onClose={() => setShowAgentDashboard(false)}
+      />
 
-              <Text style={s.label}>Agent Name</Text>
-              <TextInput
-                style={s.input}
-                value={newWorkspaceName}
-                onChangeText={setNewWorkspaceName}
-                placeholder="Frontend Assistant"
-                placeholderTextColor={colors.textMuted}
-                autoFocus={true}
-              />
+      <UsageAnalyticsModal
+        visible={showUsageModal}
+        styles={s}
+        usageSummary={usageSummary}
+        threadLabelById={threadLabelById}
+        onClose={() => setShowUsageModal(false)}
+      />
 
-              <Text style={s.label}>Model</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.modelOptionRow, { marginBottom: 8 }]}>
-                {MODEL_OPTIONS.map((model) => {
-                  const selected = newWorkspaceModel === model;
-                  return (
-                    <Pressable
-                      key={model}
-                      style={[s.modelOptionChip, selected && s.modelOptionChipActive]}
-                      onPress={() => setNewWorkspaceModel(model)}
-                    >
-                      <Text style={[s.modelOptionText, selected && s.modelOptionTextActive]}>{model}</Text>
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-              <TextInput
-                style={s.input}
-                value={newWorkspaceModel}
-                onChangeText={setNewWorkspaceModel}
-                placeholder="or type custom model"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+      <NotificationsModal
+        visible={showNotificationsModal}
+        styles={s}
+        notificationRows={notificationRows}
+        notificationPrefs={notificationPrefs}
+        notificationHistory={notificationHistory}
+        loadingNotifications={loadingNotifications}
+        onUpdateLevel={(agentId, level) => void handleUpdateNotificationLevel(agentId, level)}
+        onRefresh={() => void loadNotificationCenterData()}
+        onClose={() => setShowNotificationsModal(false)}
+      />
 
-              <Text style={s.label}>Working Directory</Text>
-              <TextInput
-                style={[s.input, { marginBottom: 6 }]}
-                value={newWorkspaceCwd}
-                onChangeText={setNewWorkspaceCwd}
-                placeholder="/path/to/project"
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-              {connectionStatus === 'connected' ? (
-                <View style={s.cwdActions}>
-                  <Pressable
-                    style={s.cwdActionBtn}
-                    onPress={() => {
-                      setShowDirectoryPicker(true);
-                      setDirectoryResolvedCwd(newWorkspaceCwd.trim() || '.');
-                      void loadDirectoryOptions('.');
-                    }}
-                  >
-                    <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
-                    <Text style={s.cwdActionText}>Browse</Text>
-                  </Pressable>
-                  <Pressable
-                    style={s.cwdActionBtn}
-                    onPress={() => {
-                      setShowRepoManager(true);
-                      void refreshRepoEntries();
-                    }}
-                  >
-                    <Ionicons name="git-branch-outline" size={16} color={colors.accent} />
-                    <Text style={s.cwdActionText}>Repos</Text>
-                  </Pressable>
-                </View>
-              ) : (
-                <Text style={s.cwdHint}>Connect to bridge to browse directories</Text>
-              )}
+      <QrScannerModal
+        visible={showQrScanner}
+        styles={s}
+        qrScanEnabled={qrScanEnabled}
+        onBarcodeScanned={handleBarCodeScanned}
+        onRescan={() => setQrScanEnabled(true)}
+        onClose={() => setShowQrScanner(false)}
+      />
 
-              <Text style={s.label}>Approval Policy</Text>
-              <View style={s.themeModeRow}>
-                <Pressable
-                  style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipActive]}
-                  onPress={() => setNewWorkspaceApprovalPolicy('never')}
-                >
-                  <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'never' && s.themeModeChipTextActive]}>
-                    Auto-approve
-                  </Text>
-                </Pressable>
-                <Pressable
-                  style={[s.themeModeChip, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipActive]}
-                  onPress={() => setNewWorkspaceApprovalPolicy('on-request')}
-                >
-                  <Text style={[s.themeModeChipText, newWorkspaceApprovalPolicy === 'on-request' && s.themeModeChipTextActive]}>
-                    Ask first
-                  </Text>
-                </Pressable>
-              </View>
+      <ExecRunnerModal
+        visible={showExecRunner}
+        styles={s}
+        colors={colors}
+        execNameInput={execNameInput}
+        execModeInput={execModeInput}
+        execPromptInput={execPromptInput}
+        execFlowInput={execFlowInput}
+        execModelInput={execModelInput}
+        execCwdInput={execCwdInput}
+        execApprovalPolicyInput={execApprovalPolicyInput}
+        execSystemPromptInput={execSystemPromptInput}
+        runningExec={runningExec}
+        execPresets={execPresets}
+        execRuns={execRuns}
+        setExecNameInput={setExecNameInput}
+        setExecModeInput={setExecModeInput}
+        setExecPromptInput={setExecPromptInput}
+        setExecFlowInput={setExecFlowInput}
+        setExecModelInput={setExecModelInput}
+        setExecCwdInput={setExecCwdInput}
+        setExecApprovalPolicyInput={setExecApprovalPolicyInput}
+        setExecSystemPromptInput={setExecSystemPromptInput}
+        onDismissKeyboard={dismissKeyboard}
+        onSavePreset={handleSaveExecPreset}
+        onRunNow={() => void handleRunExec()}
+        onApplyPresetToForm={applyExecPresetToForm}
+        onRunPreset={(preset) => void handleRunExec(preset)}
+        onDeletePreset={handleDeleteExecPreset}
+        onOpenRunThread={(workspaceId, threadId) => {
+          setActiveWorkspace(workspaceId);
+          setActiveThread(workspaceId, threadId);
+          setShowExecRunner(false);
+        }}
+        onClearRuns={handleClearExecRuns}
+        onClose={() => setShowExecRunner(false)}
+      />
 
-              <Text style={s.label}>System Prompt</Text>
-              <TextInput
-                style={[s.input, s.systemPromptInput]}
-                value={newWorkspaceSystemPrompt}
-                onChangeText={setNewWorkspaceSystemPrompt}
-                placeholder="Instructions prepended to every turn"
-                placeholderTextColor={colors.textMuted}
-                multiline
-              />
+      <WorkspaceMoreMenuModal
+        visible={showMoreMenu}
+        styles={s}
+        colors={colors}
+        items={moreMenuItems}
+        onClose={() => setShowMoreMenu(false)}
+      />
 
-              <View style={s.templateSaveRow}>
-                <TextInput
-                  style={[s.input, s.templateSaveInput, { marginBottom: 0 }]}
-                  value={customTemplateName}
-                  onChangeText={setCustomTemplateName}
-                  placeholder="Save as template..."
-                  placeholderTextColor={colors.textMuted}
-                />
-                <Pressable
-                  style={[s.cwdActionBtn, (savingTemplate || !customTemplateName.trim()) && s.smallActionBtnDisabled]}
-                  onPress={() => void handleSaveCustomTemplate()}
-                  disabled={savingTemplate || !customTemplateName.trim()}
-                >
-                  <Text style={s.cwdActionText}>{savingTemplate ? 'Saving...' : 'Save'}</Text>
-                </Pressable>
-              </View>
-            </ScrollView>
+      <SettingsModal
+        visible={showSettings}
+        styles={s}
+        colors={colors}
+        urlInput={urlInput}
+        apiKeyInput={apiKeyInput}
+        bridgeHealth={bridgeHealth}
+        themePreference={themePreference}
+        resolvedTheme={resolvedTheme}
+        checkingHealth={checkingHealth}
+        sendingTestNotification={sendingTestNotification}
+        saved={saved}
+        onChangeUrlInput={setUrlInput}
+        onChangeApiKeyInput={setApiKeyInput}
+        onChangeThemePreference={setThemePreference}
+        onCheckHealth={() => void handleCheckBridgeHealth()}
+        onSendTestNotification={handleSendTestNotification}
+        onSave={handleSaveBridgeUrl}
+        onClose={() => setShowSettings(false)}
+      />
 
-            <View style={s.createAgentFooter}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowCreateWorkspace(false)}>
-                <Text style={s.cancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[s.primaryBtn, { flex: 1 }, (creatingWorkspace || !newWorkspaceName.trim()) && { opacity: 0.55 }]}
-                onPress={handleCreateWorkspace}
-                disabled={creatingWorkspace || !newWorkspaceName.trim()}
-              >
-                <Text style={[s.primaryText, { textAlign: 'center' }]}>{creatingWorkspace ? 'Creating...' : 'Create Agent'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <EditAgentModal
+        visible={showEditModel}
+        styles={s}
+        colors={colors}
+        modelInput={modelInput}
+        cwdInput={cwdInput}
+        connectionStatus={connectionStatus}
+        savingModel={savingModel}
+        onChangeModelInput={setModelInput}
+        onChangeCwdInput={setCwdInput}
+        onOpenDirectoryPicker={() => openDirectoryPicker(cwdInput, 'agent')}
+        onSave={handleSaveModel}
+        onClose={() => setShowEditModel(false)}
+      />
 
-      <Modal visible={showDirectoryPicker} transparent={true} animationType="fade" presentationStyle="overFullScreen" onRequestClose={() => setShowDirectoryPicker(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>Choose Directory</Text>
-            <Text style={s.fileBrowserPathLabel}>{directoryPath}</Text>
-            <ScrollView style={s.fileListWrap}>
-              <Pressable
-                style={s.fileRow}
-                onPress={() => {
-                  if (directoryPath === '.') return;
-                  const parent = directoryPath.split('/').slice(0, -1).join('/') || '.';
-                  void loadDirectoryOptions(parent);
-                }}
-              >
-                <Text style={s.fileRowName}>[DIR] ..</Text>
-              </Pressable>
-              {loadingDirectories && <Text style={s.fileHint}>Loading directories...</Text>}
-              {!loadingDirectories && directoryEntries.map((entry) => (
-                <Pressable
-                  key={entry.path}
-                  style={s.fileRow}
-                  onPress={() => {
-                    void loadDirectoryOptions(entry.path);
-                  }}
-                >
-                  <Text style={s.fileRowName}>[DIR] {entry.name}</Text>
-                </Pressable>
-              ))}
-            </ScrollView>
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowDirectoryPicker(false)}>
-                <Text style={s.cancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={s.primaryBtn}
-                onPress={() => {
-                  const selected = directoryResolvedCwd || newWorkspaceCwd;
-                  setNewWorkspaceCwd(selected);
-                  setCwdInput(selected);
-                  setShowDirectoryPicker(false);
-                }}
-              >
-                <Text style={s.primaryText}>Select</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showRepoManager} transparent={true} animationType="fade" presentationStyle="overFullScreen" onRequestClose={() => setShowRepoManager(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>Repositories</Text>
-            <TextInput
-              style={s.input}
-              value={cloneRepoUrl}
-              onChangeText={setCloneRepoUrl}
-              placeholder="https://github.com/org/repo.git"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            <View style={s.settingsInlineActions}>
-              <Pressable
-                style={[s.cancelBtn, (cloningRepo || !cloneRepoUrl.trim()) && s.smallActionBtnDisabled]}
-                onPress={() => void handleCloneRepo()}
-                disabled={cloningRepo || !cloneRepoUrl.trim()}
-              >
-                <Text style={s.cancelText}>{cloningRepo ? 'Cloning...' : 'Clone Repo'}</Text>
-              </Pressable>
-              <Pressable style={s.cancelBtn} onPress={() => void refreshRepoEntries()}>
-                <Text style={s.cancelText}>Refresh</Text>
-              </Pressable>
-            </View>
-            <ScrollView style={s.fileListWrap}>
-              {loadingRepos && <Text style={s.fileHint}>Loading repositories...</Text>}
-              {!loadingRepos && repoEntries.map((repo) => (
-                <View key={repo.path} style={s.repoRow}>
-                  <View style={s.repoMeta}>
-                    <Text style={s.repoName} numberOfLines={1}>{repo.name}</Text>
-                    <Text style={s.repoPath} numberOfLines={1}>{repo.path}</Text>
-                  </View>
-                  <Pressable style={s.cancelBtn} onPress={() => void handlePullRepo(repo.path)}>
-                    <Text style={s.cancelText}>Pull</Text>
-                  </Pressable>
-                  <Pressable
-                    style={s.primaryBtn}
-                    onPress={() => {
-                      setNewWorkspaceCwd(repo.path);
-                      setShowRepoManager(false);
-                    }}
-                  >
-                    <Text style={s.primaryText}>Use</Text>
-                  </Pressable>
-                </View>
-              ))}
-            </ScrollView>
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowRepoManager(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showCreateThread} transparent={true} animationType="fade" onRequestClose={() => setShowCreateThread(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>New Thread</Text>
-            <Text style={s.label}>Thread Name (optional)</Text>
-            <TextInput
-              style={s.input}
-              value={newThreadTitle}
-              onChangeText={setNewThreadTitle}
-              placeholder={`Thread ${(activeWorkspace?.threads.length || 0) + 1}`}
-              placeholderTextColor={colors.textMuted}
-              autoFocus={true}
-            />
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowCreateThread(false)}>
-                <Text style={s.cancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[s.primaryBtn, creatingThread && { opacity: 0.55 }]}
-                onPress={handleCreateThread}
-                disabled={creatingThread || !activeWorkspace}
-              >
-                <Text style={s.primaryText}>{creatingThread ? 'Creating...' : 'Create'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showFileBrowser} transparent={true} animationType="fade" onRequestClose={() => setShowFileBrowser(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Files</Text>
-            <Text style={s.fileBrowserPathLabel}>{selectedFilePath || fileBrowserPath}</Text>
-
-            {selectedFilePath ? (
-              <ScrollView style={s.fileViewerWrap}>
-                <SyntaxHighlighter
-                  highlighter="hljs"
-                  language={guessLanguageFromPath(selectedFilePath)}
-                  style={(resolvedTheme === 'dark' ? atomOneDark : atomOneLight) as any}
-                  fontFamily={typography.mono}
-                  fontSize={12}
-                >
-                  {selectedFileContent}
-                </SyntaxHighlighter>
-              </ScrollView>
-            ) : (
-              <ScrollView style={s.fileListWrap}>
-                {loadingFileEntries && <Text style={s.fileHint}>Loading files...</Text>}
-                {!loadingFileEntries && fileEntries.map((entry) => (
-                  <Pressable
-                    key={entry.path}
-                    style={s.fileRow}
-                    onPress={() => {
-                      if (entry.type === 'directory') {
-                        void loadDirectoryEntries(entry.path);
-                        return;
-                      }
-                      void openFilePath(entry.path);
-                    }}
-                  >
-                    <Text style={s.fileRowName} numberOfLines={1}>
-                      {entry.type === 'directory' ? `[DIR] ${entry.name}` : `[FILE] ${entry.name}`}
-                    </Text>
-                    {modifiedFiles.has(entry.path) && <Text style={s.fileRowBadge}>Modified</Text>}
-                  </Pressable>
-                ))}
-              </ScrollView>
-            )}
-
-            {!!fileBrowserError && <Text style={s.fileErrorText}>{fileBrowserError}</Text>}
-
-            <View style={s.modalActions}>
-              <Pressable
-                style={s.cancelBtn}
-                onPress={() => {
-                  if (selectedFilePath) {
-                    setSelectedFilePath(null);
-                    setSelectedFileContent('');
-                  } else {
-                    setShowFileBrowser(false);
-                  }
-                }}
-              >
-                <Text style={s.cancelText}>{selectedFilePath ? 'Back' : 'Close'}</Text>
-              </Pressable>
-              <Pressable
-                style={[s.primaryBtn, loadingFileContent && s.smallActionBtnDisabled]}
-                onPress={() => {
-                  if (selectedFilePath) {
-                    setSelectedFilePath(null);
-                    setSelectedFileContent('');
-                    return;
-                  }
-                  void loadDirectoryEntries(fileBrowserPath);
-                }}
-                disabled={loadingFileContent}
-              >
-                <Text style={s.primaryText}>{loadingFileContent ? 'Opening...' : (selectedFilePath ? 'List' : 'Refresh')}</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showGitModal} transparent={true} animationType="fade" onRequestClose={() => setShowGitModal(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Git</Text>
-            <View style={s.gitStatusCard}>
-              <Text style={s.gitStatusTitle}>{gitStatus?.branch || 'No git data yet'}</Text>
-              <Text style={s.gitStatusSub}>
-                {gitStatus ? (gitStatus.isClean ? 'Working tree clean' : 'Uncommitted changes detected') : 'Connect workspace to load repository status'}
-              </Text>
-            </View>
-
-            <View style={s.gitBlock}>
-              {loadingGit && <Text style={s.fileHint}>Loading git info...</Text>}
-
-              {!loadingGit && (
-                <>
-                  <Text style={s.gitSectionTitle}>Branches</Text>
-                  {gitBranches.length > 0 ? (
-                    <ScrollView style={s.gitBranchList} contentContainerStyle={s.gitBranchWrap}>
-                      {gitBranches.map((branch) => {
-                        const normalizedBranch = branch.replace(/^\*\s*/, '');
-                        const isActiveBranch = normalizedBranch === gitStatus?.branch;
-                        return (
-                          <Pressable
-                            key={branch}
-                            style={[s.gitBranchChip, isActiveBranch && s.gitBranchChipActive]}
-                            onPress={() => void handleSwitchBranch(normalizedBranch)}
-                          >
-                            <Text style={[s.gitBranchText, isActiveBranch && s.gitBranchTextActive]}>{normalizedBranch}</Text>
-                          </Pressable>
-                        );
-                      })}
-                    </ScrollView>
-                  ) : (
-                    <Text style={s.fileHint}>No branches available.</Text>
-                  )}
-
-                  <Text style={s.gitSectionTitle}>Diff</Text>
-                  <ScrollView style={s.gitDiffBox}>
-                    <Text style={s.gitDiffText}>{gitDiff || 'No diff'}</Text>
-                  </ScrollView>
-                </>
-              )}
-            </View>
-
-            <View style={s.gitActionRow}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowGitModal(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-              <Pressable style={[s.cancelBtn, loadingGit && s.smallActionBtnDisabled]} onPress={() => void refreshGitInfo()}>
-                <Text style={s.cancelText}>Refresh</Text>
-              </Pressable>
-              <Pressable
-                style={[s.primaryBtn, (committingGit || gitStatus?.isClean) && s.smallActionBtnDisabled]}
-                onPress={() => void handleCommitGitChanges()}
-                disabled={committingGit || !!gitStatus?.isClean}
-              >
-                <Text style={s.primaryText}>{committingGit ? 'Committing...' : 'Commit'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showAgentDashboard} transparent={true} animationType="fade" onRequestClose={() => setShowAgentDashboard(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Agent Dashboard</Text>
-            <View style={s.themeModeRow}>
-              {(['all', 'active', 'stopped'] as const).map((filter) => (
-                <Pressable
-                  key={filter}
-                  style={[s.themeModeChip, agentDashboardFilter === filter && s.themeModeChipActive]}
-                  onPress={() => setAgentDashboardFilter(filter)}
-                >
-                  <Text style={[s.themeModeChipText, agentDashboardFilter === filter && s.themeModeChipTextActive]}>
-                    {filter}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-            <ScrollView style={s.fileListWrap}>
-              {dashboardAgents.map((row) => (
-                <Pressable
-                  key={`${row.workspaceId}_${row.threadId}`}
-                  style={s.dashboardRow}
-                  onPress={() => handleOpenDashboardThread(row.workspaceId, row.threadId)}
-                  onLongPress={() => handleDashboardLongPress(row.workspaceId, row.threadId, row.status)}
-                >
-                  <View style={s.dashboardRowTop}>
-                    <Text style={s.dashboardTitle} numberOfLines={1}>
-                      {row.workspaceName} · {row.threadTitle}
-                    </Text>
-                    <Text style={[s.dashboardStatusDot, row.status === 'stopped' && s.dashboardStatusDotStopped]}>
-                      ●
-                    </Text>
-                  </View>
-                  <Text style={s.dashboardMeta} numberOfLines={1}>
-                    {row.model} • {row.status} • {row.minutesAgo}m ago
-                  </Text>
-                  <Text style={s.dashboardMetricLine} numberOfLines={1}>
-                    avg {(row.averageResponseMs / 1000).toFixed(1)}s • errors {row.errorCount} • active {Math.round(row.activeTimeMs / 60000)}m
-                  </Text>
-                  {!!row.lastPreview && (
-                    <Text style={s.dashboardPreview} numberOfLines={2}>
-                      {row.lastPreview}
-                    </Text>
-                  )}
-                </Pressable>
-              ))}
-              {dashboardAgents.length === 0 && <Text style={s.fileHint}>No agents for this filter.</Text>}
-            </ScrollView>
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowAgentDashboard(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showUsageModal} transparent={true} animationType="fade" onRequestClose={() => setShowUsageModal(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Usage Analytics</Text>
-            <View style={s.usageSummaryGrid}>
-              <View style={s.usageSummaryCard}>
-                <Text style={s.usageSummaryLabel}>Messages (today)</Text>
-                <Text style={s.usageSummaryValue}>{usageSummary?.messagesSentToday ?? 0}</Text>
-              </View>
-              <View style={s.usageSummaryCard}>
-                <Text style={s.usageSummaryLabel}>Messages (7d)</Text>
-                <Text style={s.usageSummaryValue}>{usageSummary?.messagesSentWeek ?? 0}</Text>
-              </View>
-              <View style={s.usageSummaryCard}>
-                <Text style={s.usageSummaryLabel}>Turns (today)</Text>
-                <Text style={s.usageSummaryValue}>{usageSummary?.today?.turns ?? 0}</Text>
-              </View>
-              <View style={s.usageSummaryCard}>
-                <Text style={s.usageSummaryLabel}>Turns (7d)</Text>
-                <Text style={s.usageSummaryValue}>{usageSummary?.week?.turns ?? 0}</Text>
-              </View>
-            </View>
-
-            <View style={s.usageCostBox}>
-              <Text style={s.usageCostText}>
-                Est. cost today: ${(usageSummary?.today?.estimatedCostUsd ?? 0).toFixed(4)}
-              </Text>
-              <Text style={s.usageCostText}>
-                Est. cost 7d: ${(usageSummary?.week?.estimatedCostUsd ?? 0).toFixed(4)}
-              </Text>
-            </View>
-
-            <Text style={s.label}>Active Time per Agent (7d)</Text>
-            <ScrollView style={s.fileListWrap}>
-              {(usageSummary?.agents || []).map((entry: any) => (
-                <View key={entry.agentId} style={s.usageAgentRow}>
-                  <View style={s.usageAgentMeta}>
-                    <Text style={s.usageAgentTitle} numberOfLines={1}>
-                      {threadLabelById.get(entry.agentId) || entry.agentId}
-                    </Text>
-                    <Text style={s.usageAgentSub} numberOfLines={1}>
-                      {entry.model} • turns {entry.turns} • errors {entry.errorCount}
-                    </Text>
-                  </View>
-                  <Text style={s.usageAgentTime}>{Math.round((entry.activeTimeMs || 0) / 60000)}m</Text>
-                </View>
-              ))}
-              {(usageSummary?.agents || []).length === 0 && (
-                <Text style={s.fileHint}>No turn metrics yet. Send messages to start tracking.</Text>
-              )}
-            </ScrollView>
-
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowUsageModal(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showNotificationsModal} transparent={true} animationType="fade" onRequestClose={() => setShowNotificationsModal(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Notifications</Text>
-            <Text style={s.label}>Per-agent preferences</Text>
-            <ScrollView style={s.fileListWrap}>
-              {notificationRows.map((row) => {
-                const currentLevel = notificationPrefs[row.agentId] || 'all';
-                return (
-                  <View key={row.agentId} style={s.notificationPrefRow}>
-                    <Text style={s.notificationPrefTitle} numberOfLines={1}>{row.label}</Text>
-                    <View style={s.notificationPrefChips}>
-                      {(['all', 'errors', 'muted'] as const).map((level) => (
-                        <Pressable
-                          key={level}
-                          style={[s.notificationPrefChip, currentLevel === level && s.notificationPrefChipActive]}
-                          onPress={() => void handleUpdateNotificationLevel(row.agentId, level)}
-                        >
-                          <Text style={[s.notificationPrefChipText, currentLevel === level && s.notificationPrefChipTextActive]}>
-                            {level}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-                  </View>
-                );
-              })}
-              {notificationRows.length === 0 && (
-                <Text style={s.fileHint}>No agents available yet.</Text>
-              )}
-            </ScrollView>
-
-            <Text style={s.label}>History</Text>
-            <ScrollView style={s.fileListWrap}>
-              {loadingNotifications && <Text style={s.fileHint}>Loading notification history...</Text>}
-              {!loadingNotifications && notificationHistory.map((entry) => (
-                <View key={entry.id} style={s.notificationHistoryRow}>
-                  <Text style={s.notificationHistoryTitle} numberOfLines={1}>
-                    {entry.title}
-                  </Text>
-                  <Text style={s.notificationHistoryBody} numberOfLines={2}>
-                    {entry.body}
-                  </Text>
-                  <Text style={s.notificationHistoryMeta} numberOfLines={1}>
-                    {formatNotificationTimestamp(entry.timestamp)} • {entry.severity} • {entry.status} • tokens {entry.deliveredCount}
-                  </Text>
-                </View>
-              ))}
-              {!loadingNotifications && notificationHistory.length === 0 && (
-                <Text style={s.fileHint}>No notifications sent yet.</Text>
-              )}
-            </ScrollView>
-
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowNotificationsModal(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-              <Pressable style={s.cancelBtn} onPress={() => void loadNotificationCenterData()}>
-                <Text style={s.cancelText}>Refresh</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showQrScanner} transparent={true} animationType="fade" onRequestClose={() => setShowQrScanner(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <Text style={s.modalTitle}>Scan Bridge QR</Text>
-            <Text style={s.themeHint}>Point camera at the QR code shown in bridge terminal output.</Text>
-            <View style={s.qrScannerWrap}>
-              <CameraView
-                onBarcodeScanned={handleBarCodeScanned}
-                barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-                style={StyleSheet.absoluteFillObject}
-              />
-            </View>
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowQrScanner(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-              <Pressable
-                style={s.cancelBtn}
-                onPress={() => setQrScanEnabled(true)}
-              >
-                <Text style={s.cancelText}>Rescan</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showExecRunner} transparent={true} animationType="fade" onRequestClose={() => setShowExecRunner(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={[s.modal, s.fileBrowserModal]}>
-            <View style={s.execHeaderRow}>
-              <Text style={[s.modalTitle, s.execModalTitle]}>Exec Mode</Text>
-              <Pressable style={s.cancelBtn} onPress={dismissKeyboard}>
-                <Text style={s.cancelText}>Done</Text>
-              </Pressable>
-            </View>
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              keyboardDismissMode="on-drag"
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={s.execModalContent}
-            >
-              <Text style={s.themeHint}>Run non-interactive Codex jobs and multi-step automation flows.</Text>
-
-              <Text style={s.label}>Job Name</Text>
-              <TextInput
-                style={s.input}
-                value={execNameInput}
-                onChangeText={setExecNameInput}
-                placeholder="Nightly bug sweep"
-                placeholderTextColor={colors.textMuted}
-                autoCorrect={false}
-                returnKeyType="done"
-                onSubmitEditing={dismissKeyboard}
-              />
-
-              <Text style={s.label}>Mode</Text>
-              <View style={s.themeModeRow}>
-                {(['task', 'flow'] as ExecModeType[]).map((mode) => (
-                  <Pressable
-                    key={mode}
-                    style={[s.themeModeChip, execModeInput === mode && s.themeModeChipActive]}
-                    onPress={() => setExecModeInput(mode)}
-                  >
-                    <Text style={[s.themeModeChipText, execModeInput === mode && s.themeModeChipTextActive]}>
-                      {mode}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              {execModeInput === 'task' ? (
-                <>
-                  <Text style={s.label}>Prompt</Text>
-                  <TextInput
-                    style={[s.input, s.systemPromptInput]}
-                    value={execPromptInput}
-                    onChangeText={setExecPromptInput}
-                    placeholder="Run full code review and commit safe fixes."
-                    placeholderTextColor={colors.textMuted}
-                    multiline
-                  />
-                </>
-              ) : (
-                <>
-                  <Text style={s.label}>Flow Steps (one per line)</Text>
-                  <TextInput
-                    style={[s.input, s.systemPromptInput]}
-                    value={execFlowInput}
-                    onChangeText={setExecFlowInput}
-                    placeholder={`Audit current branch\nFix P0/P1 issues\nRun tests and commit`}
-                    placeholderTextColor={colors.textMuted}
-                    multiline
-                  />
-                </>
-              )}
-
-              <Text style={s.label}>Model</Text>
-              <TextInput
-                style={s.input}
-                value={execModelInput}
-                onChangeText={setExecModelInput}
-                placeholder="gpt-5.1-codex"
-                placeholderTextColor={colors.textMuted}
-                autoCorrect={false}
-                autoCapitalize="none"
-                returnKeyType="done"
-                onSubmitEditing={dismissKeyboard}
-              />
-
-              <Text style={s.label}>Working Directory</Text>
-              <TextInput
-                style={s.input}
-                value={execCwdInput}
-                onChangeText={setExecCwdInput}
-                placeholder="/Users/apple/Work/DhruvalPersonal"
-                placeholderTextColor={colors.textMuted}
-                autoCorrect={false}
-                autoCapitalize="none"
-                returnKeyType="done"
-                onSubmitEditing={dismissKeyboard}
-              />
-
-              <Text style={s.label}>Approval Policy</Text>
-              <View style={s.themeModeRow}>
-                {(['never', 'on-request'] as const).map((policy) => (
-                  <Pressable
-                    key={policy}
-                    style={[s.themeModeChip, execApprovalPolicyInput === policy && s.themeModeChipActive]}
-                    onPress={() => setExecApprovalPolicyInput(policy)}
-                  >
-                    <Text style={[s.themeModeChipText, execApprovalPolicyInput === policy && s.themeModeChipTextActive]}>
-                      {policy}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              <Text style={s.label}>System Prompt (optional)</Text>
-              <TextInput
-                style={[s.input, s.systemPromptInput]}
-                value={execSystemPromptInput}
-                onChangeText={setExecSystemPromptInput}
-                placeholder="Always include tests and concise summary."
-                placeholderTextColor={colors.textMuted}
-                multiline
-              />
-
-              <View style={s.execActionRow}>
-                <Pressable style={s.cancelBtn} onPress={handleSaveExecPreset}>
-                  <Text style={s.cancelText}>Save Preset</Text>
-                </Pressable>
-                <Pressable
-                  style={[s.primaryBtn, runningExec && s.smallActionBtnDisabled]}
-                  onPress={() => void handleRunExec()}
-                  disabled={runningExec}
-                >
-                  <Text style={s.primaryText}>{runningExec ? 'Starting...' : 'Run Now'}</Text>
-                </Pressable>
-              </View>
-
-              <Text style={s.label}>Saved Automations</Text>
-              <ScrollView style={s.execListWrap} keyboardShouldPersistTaps="handled">
-                {execPresets.map((preset) => (
-                  <View key={preset.id} style={s.execListRow}>
-                    <View style={s.execListRowTop}>
-                      <Text style={s.execListTitle} numberOfLines={1}>{preset.name}</Text>
-                      <Text style={s.execListBadge}>{preset.mode}</Text>
-                    </View>
-                    <Text style={s.execListMeta} numberOfLines={1}>
-                      {preset.model} • {preset.cwd}
-                    </Text>
-                    <Text style={s.execListMeta} numberOfLines={1}>
-                      {preset.mode === 'flow' ? `${preset.steps.length} steps` : 'Single task'}
-                    </Text>
-                    <View style={s.execListActions}>
-                      <Pressable style={s.cancelBtn} onPress={() => applyExecPresetToForm(preset)}>
-                        <Text style={s.cancelText}>Load</Text>
-                      </Pressable>
-                      <Pressable style={s.cancelBtn} onPress={() => void handleRunExec(preset)}>
-                        <Text style={s.cancelText}>Run</Text>
-                      </Pressable>
-                      <Pressable style={s.cancelBtn} onPress={() => handleDeleteExecPreset(preset.id)}>
-                        <Text style={s.cancelText}>Delete</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                ))}
-                {execPresets.length === 0 && (
-                  <Text style={s.fileHint}>Save a preset to reuse job/flow definitions.</Text>
-                )}
-              </ScrollView>
-
-              <Text style={s.label}>Recent Runs</Text>
-              <ScrollView style={s.execRunsWrap} keyboardShouldPersistTaps="handled">
-                {execRuns.map((run) => (
-                  <View key={run.id} style={s.execListRow}>
-                    <View style={s.execListRowTop}>
-                      <Text style={s.execListTitle} numberOfLines={1}>{run.name}</Text>
-                      <Text
-                        style={[
-                          s.execRunStatus,
-                          run.status === 'completed' && s.execRunStatusCompleted,
-                          run.status === 'failed' && s.execRunStatusFailed,
-                        ]}
-                      >
-                        {run.status}
-                      </Text>
-                    </View>
-                    <Text style={s.execListMeta} numberOfLines={1}>
-                      {run.mode} • {run.stepCount} step{run.stepCount === 1 ? '' : 's'}
-                    </Text>
-                    <Text style={s.execListMeta} numberOfLines={1}>
-                      started {formatExecRunTime(run.startedAt)}
-                    </Text>
-                    {!!run.finishedAt && (
-                      <Text style={s.execListMeta} numberOfLines={1}>
-                        finished {formatExecRunTime(run.finishedAt)}
-                      </Text>
-                    )}
-                    {!!run.error && (
-                      <Text style={s.fileErrorText} numberOfLines={2}>
-                        {run.error}
-                      </Text>
-                    )}
-                    {!!run.workspaceId && !!run.threadId && (
-                      <View style={s.execListActions}>
-                        <Pressable
-                          style={s.cancelBtn}
-                          onPress={() => {
-                            setActiveWorkspace(run.workspaceId!);
-                            setActiveThread(run.workspaceId!, run.threadId!);
-                            setShowExecRunner(false);
-                          }}
-                        >
-                          <Text style={s.cancelText}>Open Thread</Text>
-                        </Pressable>
-                      </View>
-                    )}
-                  </View>
-                ))}
-                {execRuns.length === 0 && (
-                  <Text style={s.fileHint}>No runs yet.</Text>
-                )}
-              </ScrollView>
-
-              <View style={s.modalActions}>
-                <Pressable style={s.cancelBtn} onPress={handleClearExecRuns}>
-                  <Text style={s.cancelText}>Clear Runs</Text>
-                </Pressable>
-                <Pressable style={s.cancelBtn} onPress={() => setShowExecRunner(false)}>
-                  <Text style={s.cancelText}>Close</Text>
-                </Pressable>
-              </View>
-            </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showMoreMenu} transparent={true} animationType="fade" onRequestClose={() => setShowMoreMenu(false)}>
-        <Pressable style={s.modalOverlay} onPress={() => setShowMoreMenu(false)}>
-          <Pressable style={s.moreMenuSheet} onPress={() => {}}>
-            <View style={s.moreMenuHandle} />
-            {[
-              { icon: 'folder-outline' as const, label: 'Files', onPress: () => { setShowMoreMenu(false); handleOpenFileBrowser(); }, disabled: !activeWorkspace },
-              { icon: 'git-branch-outline' as const, label: 'Git', onPress: () => { setShowMoreMenu(false); setShowGitModal(true); void refreshGitInfo(); }, disabled: !activeWorkspace },
-              { icon: 'people-outline' as const, label: 'Agents', onPress: () => { setShowMoreMenu(false); setShowAgentDashboard(true); } },
-              { icon: 'bar-chart-outline' as const, label: 'Usage', onPress: () => { setShowMoreMenu(false); setShowUsageModal(true); } },
-              { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => { setShowMoreMenu(false); setShowNotificationsModal(true); } },
-              { icon: 'flash-outline' as const, label: 'Exec Mode', onPress: openExecRunner },
-              { icon: 'build-outline' as const, label: 'Agent Config', onPress: () => { setShowMoreMenu(false); setShowEditModel(true); }, disabled: !activeAgent },
-            ].map((item) => (
-              <Pressable
-                key={item.label}
-                style={({ pressed }) => [s.moreMenuItem, item.disabled && s.smallActionBtnDisabled, pressed && s.pressed]}
-                onPress={item.onPress}
-                disabled={item.disabled}
-              >
-                <Ionicons name={item.icon} size={20} color={colors.textPrimary} />
-                <Text style={s.moreMenuItemText}>{item.label}</Text>
-              </Pressable>
-            ))}
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <Modal visible={showSettings} transparent={true} animationType="fade" onRequestClose={() => setShowSettings(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>Settings</Text>
-            <Text style={s.label}>Bridge WebSocket URL</Text>
-            <TextInput
-              style={s.input}
-              value={urlInput}
-              onChangeText={setUrlInput}
-              placeholder="ws://192.168.1.x:3001"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              keyboardType="url"
-            />
-            <Text style={s.label}>Bridge API Key</Text>
-            <TextInput
-              style={s.input}
-              value={apiKeyInput}
-              onChangeText={setApiKeyInput}
-              placeholder="Paste bridge API key"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              secureTextEntry={true}
-            />
-            <Text style={s.themeHint}>{bridgeHealth}</Text>
-            <Text style={s.label}>Appearance</Text>
-            <View style={s.themeModeRow}>
-              {(['system', 'light', 'dark'] as ThemePreference[]).map((mode) => {
-                const active = mode === themePreference;
-                return (
-                  <Pressable
-                    key={mode}
-                    style={[s.themeModeChip, active && s.themeModeChipActive]}
-                    onPress={() => setThemePreference(mode)}
-                  >
-                    <Text style={[s.themeModeChipText, active && s.themeModeChipTextActive]}>
-                      {mode[0].toUpperCase() + mode.slice(1)}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-            <Text style={s.themeHint}>Current theme: {resolvedTheme}</Text>
-            <View style={s.settingsInlineActions}>
-              <Pressable
-                style={[s.cancelBtn, checkingHealth && s.smallActionBtnDisabled]}
-                onPress={() => void handleCheckBridgeHealth()}
-                disabled={checkingHealth}
-              >
-                <Text style={s.cancelText}>{checkingHealth ? 'Checking...' : 'Check Health'}</Text>
-              </Pressable>
-              <Pressable
-                style={[s.cancelBtn, sendingTestNotification && s.smallActionBtnDisabled]}
-                onPress={handleSendTestNotification}
-                disabled={sendingTestNotification}
-              >
-                <Text style={s.cancelText}>
-                  {sendingTestNotification ? 'Sending...' : 'Test Notification'}
-                </Text>
-              </Pressable>
-            </View>
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowSettings(false)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-              <Pressable style={s.primaryBtn} onPress={handleSaveBridgeUrl}>
-                <Text style={s.primaryText}>{saved ? 'Saved' : 'Save & Connect'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={showEditModel} transparent={true} animationType="fade" onRequestClose={() => setShowEditModel(false)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>Edit Agent</Text>
-            <Text style={s.label}>Model</Text>
-            <TextInput
-              style={s.input}
-              value={modelInput}
-              onChangeText={setModelInput}
-              placeholder="gpt-5.1-codex"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-              autoFocus={true}
-            />
-            <Text style={s.label}>Working Directory</Text>
-            <TextInput
-              style={s.input}
-              value={cwdInput}
-              onChangeText={setCwdInput}
-              placeholder="/path/to/project"
-              placeholderTextColor={colors.textMuted}
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
-            {connectionStatus === 'connected' && (
-              <View style={s.cwdActions}>
-                <Pressable
-                  style={s.cwdActionBtn}
-                  onPress={() => {
-                    setShowDirectoryPicker(true);
-                    setDirectoryResolvedCwd(cwdInput.trim() || '.');
-                    void loadDirectoryOptions('.');
-                  }}
-                >
-                  <Ionicons name="folder-open-outline" size={16} color={colors.accent} />
-                  <Text style={s.cwdActionText}>Browse</Text>
-                </Pressable>
-              </View>
-            )}
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setShowEditModel(false)} disabled={savingModel}>
-                <Text style={s.cancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[s.primaryBtn, (savingModel || !modelInput.trim() || !cwdInput.trim()) && s.smallActionBtnDisabled]}
-                onPress={handleSaveModel}
-                disabled={savingModel || !modelInput.trim() || !cwdInput.trim()}
-              >
-                <Text style={s.primaryText}>{savingModel ? 'Saving...' : 'Save'}</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      <Modal visible={!!editingQueueItem} transparent={true} animationType="fade" onRequestClose={() => { setEditingQueueItem(null); setEditingQueueText(''); }}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>Edit Queued Message</Text>
-            <Text style={s.label}>Message</Text>
-            <TextInput
-              style={[s.input, { minHeight: 80, textAlignVertical: 'top' }]}
-              value={editingQueueText}
-              onChangeText={setEditingQueueText}
-              placeholder="Update queued message..."
-              placeholderTextColor={colors.textMuted}
-              multiline
-              autoFocus={true}
-            />
-            <View style={s.modalActions}>
-              <Pressable
-                style={s.cancelBtn}
-                onPress={() => {
-                  setEditingQueueItem(null);
-                  setEditingQueueText('');
-                }}
-              >
-                <Text style={s.cancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable
-                style={[s.primaryBtn, !editingQueueText.trim() && s.smallActionBtnDisabled]}
-                onPress={handleSaveQueuedMessageEdit}
-                disabled={!editingQueueText.trim()}
-              >
-                <Text style={s.primaryText}>Save</Text>
-              </Pressable>
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <EditQueuedMessageModal
+        visible={!!editingQueueItem}
+        styles={s}
+        colors={colors}
+        editingQueueText={editingQueueText}
+        onChangeEditingQueueText={setEditingQueueText}
+        onSave={handleSaveQueuedMessageEdit}
+        onClose={closeQueuedMessageEditor}
+      />
     </KeyboardAvoidingView>
   );
 }
