@@ -7,8 +7,7 @@ import * as Haptics from 'expo-haptics';
 import { useAgentStore } from '../stores/agentStore';
 import { useWorkspaceStore } from '../stores/workspaceStore';
 import { startAgentActivity, updateAgentActivity, stopAgentActivity, isLiveActivitySupported } from './useLiveActivity';
-import { persistThreadRecord, persistTurnMetricRecord, persistWorkspaceRecord } from '../lib/convexClient';
-import type { BridgeRequest, BridgeResponse, Agent, MessageType } from '../types';
+import type { BridgeRequest, BridgeResponse, Agent, CodexModelInfo, CodexThreadDetail, CodexThreadSummary, MessageType } from '../types';
 
 let requestCounter = 0;
 const STREAM_LOG_LIMIT = 160;
@@ -145,6 +144,7 @@ function connectWs(url: string) {
       if (res.type === 'response') {
         useAgentStore.getState().setConnectionStatus('connected');
         syncAgents();
+        syncCodexThreads();
         registerPushToken();
         return;
       }
@@ -225,7 +225,6 @@ function syncAgents() {
     if (res.type === 'response' && Array.isArray(res.data)) {
       const bridgeAgents = res.data as Agent[];
       useAgentStore.getState().mergeWithBridgeAgents(bridgeAgents);
-      void reconcileConvexWithBridgeAgents(bridgeAgents);
       for (const agent of bridgeAgents) {
         void flushQueuedIfReady(agent.id);
       }
@@ -234,84 +233,148 @@ function syncAgents() {
   globalWs.send(JSON.stringify({ action: 'list_agents', requestId }));
 }
 
-async function reconcileConvexWithBridgeAgents(bridgeAgents: Agent[]) {
-  if (!bridgeAgents.length) return;
+function pathBasename(value: string): string {
+  const normalized = value.replace(/\\/g, '/').replace(/\/$/, '');
+  const parts = normalized.split('/');
+  return parts[parts.length - 1] || value || 'Project';
+}
 
+function deriveWorkspaceName(thread: CodexThreadSummary): string {
+  const firstLine = thread.preview.split('\n')[0]?.trim() || '';
+  if (firstLine.toLowerCase().startsWith('workspace:')) {
+    return firstLine.slice('workspace:'.length).trim() || pathBasename(thread.cwd);
+  }
+  return pathBasename(thread.cwd) || 'Mac Session';
+}
+
+function deriveThreadTitle(thread: CodexThreadSummary): string {
+  if (thread.name?.trim()) return thread.name.trim();
+  const lines = thread.preview
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const candidate = lines.find((line) => !line.toLowerCase().startsWith('workspace:'));
+  return (candidate || thread.preview || 'Codex Thread').slice(0, 80).trim() || 'Codex Thread';
+}
+
+function unwrapBridgeData<T>(input: unknown): T | null {
+  if (input && typeof input === 'object' && 'data' in (input as Record<string, unknown>)) {
+    return (((input as { data?: unknown }).data) ?? null) as T | null;
+  }
+  return (input ?? null) as T | null;
+}
+
+async function syncCodexThreads() {
+  if (!globalWs || globalWs.readyState !== WebSocket.OPEN) return;
+
+  const requestId = `req_${++requestCounter}`;
+  globalPending.set(requestId, (res) => {
+    if (res.type !== 'response' || !res.data || typeof res.data !== 'object') return;
+    const payload = res.data as { data?: CodexThreadSummary[] };
+    if (!Array.isArray(payload.data)) return;
+    void reconcileCodexThreads(payload.data);
+  });
+  globalWs.send(JSON.stringify({ action: 'list_codex_threads', params: { limit: 100 }, requestId }));
+}
+
+async function reconcileCodexThreads(threads: CodexThreadSummary[]) {
+  const agentStore = useAgentStore.getState();
   const workspaceStore = useWorkspaceStore.getState();
-  const { bridgeUrl } = useAgentStore.getState();
+  const existingAgentsById = new Map(agentStore.agents.map((agent) => [agent.id, agent]));
+  const existingWorkspaces = workspaceStore.workspaces;
+  const nextAgents: Agent[] = threads.map((thread) => {
+    const existingAgent = existingAgentsById.get(thread.id);
+    return existingAgent
+      ? {
+        ...existingAgent,
+        name: deriveWorkspaceName(thread),
+        cwd: thread.cwd || existingAgent.cwd,
+        codexThreadId: existingAgent.codexThreadId || thread.id,
+        codexPath: thread.path || existingAgent.codexPath,
+        source: thread.source || existingAgent.source,
+        syncedFromCodex: true,
+      }
+      : {
+        id: thread.id,
+        name: deriveWorkspaceName(thread),
+        model: 'gpt-5.4',
+        cwd: thread.cwd || '.',
+        approvalPolicy: 'on-request',
+        serviceTier: 'fast',
+        reasoningEffort: 'medium',
+        systemPrompt: '',
+        status: 'stopped',
+        threadId: thread.id,
+        currentTurnId: null,
+        codexThreadId: thread.id,
+        codexPath: thread.path,
+        source: thread.source,
+        syncedFromCodex: true,
+        messages: [],
+        queuedMessages: [],
+      };
+  });
+  agentStore.setAgents(nextAgents);
 
-  for (const agent of bridgeAgents) {
-    const currentWorkspaces = workspaceStore.workspaces;
-    let workspace = currentWorkspaces.find((entry) =>
-      entry.threads.some((thread) => thread.id === agent.id));
+  const workspaceGroups = new Map<string, {
+    id?: string;
+    name: string;
+    cwd: string;
+    model: string;
+    approvalPolicy?: string;
+    serviceTier?: string;
+    reasoningEffort?: string;
+    systemPrompt?: string;
+    threads: Array<{ id: string; title: string; createdAt: number }>;
+  }>();
 
-    if (!workspace) {
-      workspace = currentWorkspaces.find((entry) =>
-        entry.name === agent.name && entry.cwd === agent.cwd);
+  for (const thread of threads) {
+    const workspaceName = deriveWorkspaceName(thread);
+    const key = `${thread.cwd || '.'}::${workspaceName}`;
+    const existingWorkspace = existingWorkspaces.find((entry) => entry.cwd === (thread.cwd || '.') && entry.name === workspaceName);
+    const agent = nextAgents.find((entry) => entry.id === thread.id);
+    if (!workspaceGroups.has(key)) {
+      workspaceGroups.set(key, {
+        id: existingWorkspace?.id,
+        name: workspaceName,
+        cwd: thread.cwd || agent?.cwd || '.',
+        model: agent?.model || 'gpt-5.4',
+        approvalPolicy: agent?.approvalPolicy || 'on-request',
+        serviceTier: agent?.serviceTier || 'fast',
+        reasoningEffort: agent?.reasoningEffort || 'medium',
+        systemPrompt: agent?.systemPrompt || '',
+        threads: [],
+      });
     }
+    workspaceGroups.get(key)!.threads.push({
+      id: thread.id,
+      title: deriveThreadTitle(thread),
+      createdAt: thread.updatedAt || thread.createdAt || Date.now(),
+    });
+  }
 
-    if (!workspace) {
-      const createdAt = Date.now();
-      const workspaceId = workspaceStore.createWorkspace({
-        name: agent.name,
-        model: agent.model,
-        cwd: agent.cwd,
-        approvalPolicy: agent.approvalPolicy || 'never',
-        systemPrompt: agent.systemPrompt || '',
-        firstThreadAgentId: agent.id,
-        firstThreadTitle: 'Thread 1',
-        makeActive: false,
-      });
-      await persistWorkspaceRecord({
-        id: workspaceId,
-        bridgeUrl,
-        name: agent.name,
-        model: agent.model,
-        cwd: agent.cwd,
-        approvalPolicy: agent.approvalPolicy || 'never',
-        systemPrompt: agent.systemPrompt || '',
-        createdAt,
-      });
-      await persistThreadRecord({
-        id: agent.id,
-        workspaceId,
-        title: 'Thread 1',
-        bridgeAgentId: agent.id,
-        createdAt,
-      });
-      continue;
-    }
-
-    if (!workspace.threads.some((thread) => thread.id === agent.id)) {
-      const title = `Thread ${workspace.threads.length + 1}`;
-      workspaceStore.addThreadToWorkspace({
-        workspaceId: workspace.id,
-        threadAgentId: agent.id,
-        title,
-        makeActive: false,
-      });
-      await persistThreadRecord({
-        id: agent.id,
-        workspaceId: workspace.id,
-        title,
-        bridgeAgentId: agent.id,
-        createdAt: Date.now(),
-      });
-    }
-
-    await persistWorkspaceRecord({
-      id: workspace.id,
-      bridgeUrl,
+  const nextWorkspaces = Array.from(workspaceGroups.values()).map((workspace) => {
+    const fallbackThreadId = workspace.threads[0]?.id || null;
+    const preservedActiveThreadId = existingWorkspaces.find((entry) => entry.id === workspace.id)?.activeThreadId;
+    return {
+      id: workspace.id || `ws_${workspace.name}_${workspace.cwd}`.replace(/[^a-zA-Z0-9_./-]+/g, '_'),
       name: workspace.name,
       model: workspace.model,
       cwd: workspace.cwd,
       approvalPolicy: workspace.approvalPolicy,
+      serviceTier: workspace.serviceTier,
+      reasoningEffort: workspace.reasoningEffort,
       systemPrompt: workspace.systemPrompt,
-      templateId: workspace.templateId,
-      templateIcon: workspace.templateIcon,
-      createdAt: workspace.createdAt,
-    });
-  }
+      threads: workspace.threads.sort((left, right) => right.createdAt - left.createdAt),
+      activeThreadId: preservedActiveThreadId && workspace.threads.some((thread) => thread.id === preservedActiveThreadId)
+        ? preservedActiveThreadId
+        : fallbackThreadId,
+      createdAt: workspace.threads[workspace.threads.length - 1]?.createdAt || Date.now(),
+      updatedAt: workspace.threads[0]?.createdAt || Date.now(),
+    };
+  }).sort((left, right) => right.updatedAt - left.updatedAt);
+
+  workspaceStore.replaceWorkspaces(nextWorkspaces);
 }
 
 export function sendRequest(action: string, params?: Record<string, unknown>): Promise<BridgeResponse> {
@@ -525,19 +588,6 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       const usage = extractTokenUsage(d);
       const hadError = !!d?.error || !!turn?.hadError;
 
-      void persistTurnMetricRecord({
-        id: buildTurnMetricId(agentId, startedAt, completedAt, turnId),
-        threadId: agentId,
-        agentId,
-        model,
-        startedAt,
-        completedAt,
-        responseTimeMs,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        totalTokens: usage.totalTokens,
-        hadError,
-      });
       activeTurnsByAgent.delete(agentId);
       store.updateAgentStatus(agentId, 'ready');
       void stopAgentActivity(agentId, 'Completed');
@@ -554,19 +604,6 @@ function handleStreamEvent(agentId: string, event: string, data: unknown) {
       const responseTimeMs = Math.max(0, completedAt - startedAt);
       const usage = extractTokenUsage(d);
 
-      void persistTurnMetricRecord({
-        id: buildTurnMetricId(agentId, startedAt, completedAt, turnId),
-        threadId: agentId,
-        agentId,
-        model,
-        startedAt,
-        completedAt,
-        responseTimeMs,
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        totalTokens: usage.totalTokens,
-        hadError: true,
-      });
       activeTurnsByAgent.delete(agentId);
       store.updateAgentStatus(agentId, 'error');
       store.updateAgentActivity(agentId, 'Turn failed');
@@ -657,7 +694,10 @@ export async function sendMessageToAgent(agentId: string, text: string) {
         model: agent.model,
         cwd: agent.cwd,
         approvalPolicy: agent.approvalPolicy,
+        serviceTier: agent.serviceTier,
+        reasoningEffort: agent.reasoningEffort,
         systemPrompt: agent.systemPrompt,
+        codexThreadId: agent.codexThreadId,
       });
       if (res.type === 'response' && res.data) {
         const newAgent = res.data as Agent;
@@ -706,14 +746,23 @@ export function useWebSocket() {
       name: string,
       model: string,
       cwd: string,
-      config?: { approvalPolicy?: string; systemPrompt?: string },
+      config?: {
+        approvalPolicy?: string;
+        serviceTier?: string;
+        reasoningEffort?: string;
+        systemPrompt?: string;
+        codexThreadId?: string;
+      },
     ) => {
       const res = await send('create_agent', {
         name,
         model,
         cwd,
         approvalPolicy: config?.approvalPolicy,
+        serviceTier: config?.serviceTier,
+        reasoningEffort: config?.reasoningEffort,
         systemPrompt: config?.systemPrompt,
+        codexThreadId: config?.codexThreadId,
       });
       if (res.type === 'response' && res.data) {
         useAgentStore.getState().addAgent(res.data as Agent);
@@ -752,7 +801,10 @@ export function useWebSocket() {
             model: agent.model,
             cwd: agent.cwd,
             approvalPolicy: agent.approvalPolicy,
+            serviceTier: agent.serviceTier,
+            reasoningEffort: agent.reasoningEffort,
             systemPrompt: agent.systemPrompt,
+            codexThreadId: agent.codexThreadId,
           });
           if (res.type === 'response' && res.data) {
             const newAgent = res.data as Agent;
@@ -799,14 +851,38 @@ export function useWebSocket() {
   );
 
   const updateAgentConfig = useCallback(
-    async (agentId: string, config: { model?: string; approvalPolicy?: string; systemPrompt?: string }) => {
+    async (agentId: string, config: { model?: string; cwd?: string; approvalPolicy?: string; serviceTier?: string; reasoningEffort?: string; systemPrompt?: string }) => {
       await send('update_agent_config', { agentId, ...config });
-      if (config.model?.trim()) {
-        useAgentStore.getState().updateAgentModel(agentId, config.model.trim());
-      }
+      const store = useAgentStore.getState();
+      const agents = store.agents.map((agent) =>
+        agent.id === agentId
+          ? {
+            ...agent,
+            ...(config.model?.trim() ? { model: config.model.trim() } : {}),
+            ...(config.cwd?.trim() ? { cwd: config.cwd.trim() } : {}),
+            ...(config.approvalPolicy ? { approvalPolicy: config.approvalPolicy } : {}),
+            ...(config.serviceTier ? { serviceTier: config.serviceTier } : {}),
+            ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+            ...(config.systemPrompt !== undefined ? { systemPrompt: config.systemPrompt } : {}),
+          }
+          : agent,
+      );
+      store.setAgents(agents);
     },
     [send],
   );
+
+  const listCodexModels = useCallback(async (): Promise<CodexModelInfo[]> => {
+    const res = await send('list_codex_models');
+    const data = unwrapBridgeData<CodexModelInfo[]>(res.data);
+    return Array.isArray(data) ? data : [];
+  }, [send]);
+
+  const readCodexThread = useCallback(async (threadId: string): Promise<CodexThreadDetail | null> => {
+    const res = await send('read_codex_thread', { threadId });
+    const data = unwrapBridgeData<CodexThreadDetail>(res.data);
+    return data && typeof data === 'object' ? data : null;
+  }, [send]);
 
   const interruptAgent = useCallback(
     async (agentId: string) => {
@@ -815,5 +891,21 @@ export function useWebSocket() {
     [send],
   );
 
-  return { send, createAgent, sendMessage, stopAgent, interruptAgent, updateAgentModel, updateAgentConfig };
+  const refreshCodexSessions = useCallback(async () => {
+    syncAgents();
+    await syncCodexThreads();
+  }, []);
+
+  return {
+    send,
+    createAgent,
+    sendMessage,
+    stopAgent,
+    interruptAgent,
+    updateAgentModel,
+    updateAgentConfig,
+    listCodexModels,
+    readCodexThread,
+    refreshCodexSessions,
+  };
 }

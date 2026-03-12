@@ -1,12 +1,10 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { Agent, AgentMessage, AgentStatus, MessageType, QueuedMessage } from '../types';
-import { fetchBridgeSetting, persistBridgeSetting, persistMessage } from '../lib/convexClient';
 
 const BRIDGE_URL_KEY = 'codex_bridge_url';
 const BRIDGE_API_KEY_KEY = 'codex_bridge_api_key';
 const CLIENT_ID_KEY = 'codex_client_id';
-const AGENTS_KEY = 'codex_agents';
 const ENV_BRIDGE_URL = (process.env.EXPO_PUBLIC_BRIDGE_URL || '').trim();
 const ENV_BRIDGE_API_KEY = (process.env.EXPO_PUBLIC_BRIDGE_API_KEY || '').trim();
 const DEFAULT_BRIDGE_URL = ENV_BRIDGE_URL || 'ws://localhost:3001';
@@ -51,8 +49,7 @@ interface AgentStore {
 }
 
 function saveAgents(agents: Agent[]) {
-  const persisted = agents.map(({ activityLabel: _activityLabel, messages: _messages, ...agent }) => agent);
-  AsyncStorage.setItem(AGENTS_KEY, JSON.stringify(persisted)).catch(() => {});
+  void agents;
 }
 
 function createQueuedMessage(text: string): QueuedMessage {
@@ -128,24 +125,21 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
   setBridgeUrl: (url) => {
     AsyncStorage.setItem(BRIDGE_URL_KEY, url);
-    void persistBridgeSetting({ bridgeUrl: url, apiKey: get().bridgeApiKey });
     set({ bridgeUrl: url });
   },
 
   setBridgeApiKey: (apiKey) => {
     AsyncStorage.setItem(BRIDGE_API_KEY_KEY, apiKey);
-    void persistBridgeSetting({ bridgeUrl: get().bridgeUrl, apiKey });
     set({ bridgeApiKey: apiKey });
   },
 
   loadBridgeUrl: async () => {
-    const convexSettings = await fetchBridgeSetting();
     const saved = await AsyncStorage.getItem(BRIDGE_URL_KEY);
     const savedApiKey = await AsyncStorage.getItem(BRIDGE_API_KEY_KEY);
     const savedClientId = await AsyncStorage.getItem(CLIENT_ID_KEY);
 
-    const bridgeUrl = ENV_BRIDGE_URL || convexSettings?.bridgeUrl || saved || DEFAULT_BRIDGE_URL;
-    const bridgeApiKey = ENV_BRIDGE_API_KEY || convexSettings?.apiKey || savedApiKey || DEFAULT_BRIDGE_API_KEY;
+    const bridgeUrl = ENV_BRIDGE_URL || saved || DEFAULT_BRIDGE_URL;
+    const bridgeApiKey = ENV_BRIDGE_API_KEY || savedApiKey || DEFAULT_BRIDGE_API_KEY;
     const clientId = savedClientId || createClientId();
 
     set({ bridgeUrl, bridgeApiKey, clientId, urlLoaded: true });
@@ -155,24 +149,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   loadSavedAgents: async () => {
-    try {
-      const saved = await AsyncStorage.getItem(AGENTS_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as Array<Partial<Agent>>;
-        // Mark all loaded agents as stopped initially (bridge will update live ones)
-        const agents = dedupeAgents(parsed.map((a) => ({
-          ...a,
-          messages: Array.isArray(a.messages) ? a.messages : [],
-          status: 'stopped' as AgentStatus,
-          queuedMessages: normalizeQueuedMessages(a.queuedMessages),
-        })) as Agent[]);
-        set({ agents, agentsLoaded: true });
-      } else {
-        set({ agentsLoaded: true });
-      }
-    } catch {
-      set({ agentsLoaded: true });
-    }
+    set({ agents: [], agentsLoaded: true });
   },
 
   setAgents: (agents) => {
@@ -429,7 +406,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     );
     set({ agents });
     saveAgents(agents);
-    void persistMessage(agentId, message);
   },
 
   appendDelta: (agentId, itemId, delta, msgType) => {
@@ -509,7 +485,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     set({ agents });
     saveAgents(agents);
     if (finalizedMessage) {
-      void persistMessage(agentId, finalizedMessage);
     }
   },
 }));

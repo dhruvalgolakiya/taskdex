@@ -25,7 +25,6 @@ import { registerRootComponent } from 'expo';
 import { useFonts } from 'expo-font';
 import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
-import { ConvexProvider, useQuery } from 'convex/react';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -50,19 +49,10 @@ import { MessageInput } from './components/MessageInput';
 import { TypingIndicator } from './components/TypingIndicator';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { setWidgetSummary, clearWidgetSummary } from 'taskdex-widget-bridge';
-import type { Agent, AgentMessage, QueuedMessage, AgentTemplate } from './types';
-import { api } from './convex/_generated/api';
+import type { Agent, AgentMessage, AgentTemplate, CodexModelInfo, QueuedMessage, ReasoningEffort, ServiceTier } from './types';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
 import atomOneDark from 'react-syntax-highlighter/styles/hljs/atom-one-dark';
 import atomOneLight from 'react-syntax-highlighter/styles/hljs/atom-one-light';
-import {
-  convexClient,
-  fetchThreadMessages,
-  deletePersistedMessage,
-  persistWorkspaceRecord,
-  persistThreadRecord,
-  persistTemplateRecord,
-} from './lib/convexClient';
 import {
   getConnectionColors,
   getPalette,
@@ -191,7 +181,7 @@ const BUILT_IN_TEMPLATES: AgentTemplate[] = [
   {
     id: 'builtin_bug_fixer',
     name: 'Bug Fixer',
-    model: 'gpt-5.1-codex',
+    model: 'gpt-5.4',
     promptPrefix: 'Focus on root-cause debugging, minimal safe fixes, and regression checks.',
     icon: 'bug',
     builtIn: true,
@@ -200,7 +190,7 @@ const BUILT_IN_TEMPLATES: AgentTemplate[] = [
   {
     id: 'builtin_code_reviewer',
     name: 'Code Reviewer',
-    model: 'gpt-5.1-codex',
+    model: 'gpt-5.4',
     promptPrefix: 'Prioritize correctness risks, edge cases, and missing tests with actionable fixes.',
     icon: 'review',
     builtIn: true,
@@ -209,7 +199,7 @@ const BUILT_IN_TEMPLATES: AgentTemplate[] = [
   {
     id: 'builtin_test_writer',
     name: 'Test Writer',
-    model: 'gpt-5.1-codex',
+    model: 'gpt-5.4',
     promptPrefix: 'Write focused tests for behavior, edge cases, and failures before implementation changes.',
     icon: 'test',
     builtIn: true,
@@ -217,7 +207,12 @@ const BUILT_IN_TEMPLATES: AgentTemplate[] = [
   },
 ];
 
-const MODEL_OPTIONS = ['gpt-5.1-codex', 'gpt-5-codex', 'gpt-4.1'];
+const FALLBACK_MODEL_OPTIONS = ['gpt-5.4', 'gpt-5.3-codex', 'gpt-5.3-codex-spark'];
+const FALLBACK_REASONING_EFFORTS: ReasoningEffort[] = ['minimal', 'low', 'medium', 'high'];
+const SERVICE_TIER_OPTIONS: Array<{ value: ServiceTier; label: string }> = [
+  { value: 'fast', label: 'Fast' },
+  { value: 'flex', label: 'Normal' },
+];
 const EXEC_PRESETS_KEY = 'taskdex_exec_presets_v1';
 const EXEC_RUNS_KEY = 'taskdex_exec_runs_v1';
 
@@ -288,6 +283,55 @@ function mergeLocalAndLiveMessages(localMessages: AgentMessage[], liveMessages: 
   return Array.from(merged.values()).sort((a, b) => a.timestamp - b.timestamp);
 }
 
+function findCodexModel(models: CodexModelInfo[], modelId: string): CodexModelInfo | null {
+  return models.find((entry) => entry.model === modelId || entry.id === modelId) || null;
+}
+
+function sortCodexModels(models: CodexModelInfo[]): CodexModelInfo[] {
+  return [...models].sort((left, right) => {
+    const leftId = left.model || left.id;
+    const rightId = right.model || right.id;
+    const leftRank = leftId === 'gpt-5.4' ? 0 : left.isDefault ? 1 : left.hidden ? 3 : 2;
+    const rightRank = rightId === 'gpt-5.4' ? 0 : right.isDefault ? 1 : right.hidden ? 3 : 2;
+    if (leftRank !== rightRank) return leftRank - rightRank;
+    return leftId.localeCompare(rightId);
+  });
+}
+
+function preferredDefaultModel(models: CodexModelInfo[]): string {
+  return findCodexModel(models, 'gpt-5.4')?.model
+    || sortCodexModels(models)[0]?.model
+    || FALLBACK_MODEL_OPTIONS[0];
+}
+
+function reasoningOptionsForModel(model: CodexModelInfo | null): ReasoningEffort[] {
+  const options = model?.supportedReasoningEfforts?.map((entry) => entry.reasoningEffort) || [];
+  const unique = Array.from(new Set(options.filter(Boolean)));
+  return unique.length > 0 ? unique : FALLBACK_REASONING_EFFORTS;
+}
+
+function defaultReasoningForModel(model: CodexModelInfo | null): ReasoningEffort {
+  return model?.defaultReasoningEffort || reasoningOptionsForModel(model)[0] || 'medium';
+}
+
+function labelForReasoning(value: ReasoningEffort): string {
+  if (value === 'xhigh') return 'Max';
+  return value ? `${value[0].toUpperCase()}${value.slice(1)}` : 'Medium';
+}
+
+function labelForServiceTier(value: ServiceTier): string {
+  if (value === 'flex') return 'Normal';
+  if (value === 'fast') return 'Fast';
+  return value || 'Fast';
+}
+
+function compactPath(value: string, depth = 2): string {
+  const normalized = value.replace(/\\/g, '/').replace(/\/$/, '');
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length === 0) return value || '.';
+  return parts.slice(-depth).join('/');
+}
+
 interface WorkspaceScreenProps {
   colors: Palette;
   connectionColors: Record<string, string>;
@@ -329,8 +373,6 @@ function WorkspaceScreen({
   const enqueueQueuedMessage = useAgentStore((state) => state.enqueueQueuedMessage);
   const clearQueuedMessages = useAgentStore((state) => state.clearQueuedMessages);
   const prependQueuedMessage = useAgentStore((state) => state.prependQueuedMessage);
-  const setAgentMessages = useAgentStore((state) => state.setAgentMessages);
-  const prependAgentMessages = useAgentStore((state) => state.prependAgentMessages);
   const clearAgentMessages = useAgentStore((state) => state.clearAgentMessages);
   const removeMessage = useAgentStore((state) => state.removeMessage);
   const agentIdsSignature = useAgentStore((state) => state.agents.map((agent) => agent.id).sort().join('|'));
@@ -342,15 +384,13 @@ function WorkspaceScreen({
     addThreadToWorkspace,
     setActiveThread,
     removeThreadFromWorkspace,
-    updateWorkspaceModel,
     updateWorkspaceConfig,
     replaceThreadAgentId,
-    setWorkspacesFromConvex,
     ensureWorkspacesFromAgents,
     cleanupMissingAgentThreads,
   } = useWorkspaceStore();
 
-  const { createAgent, sendMessage, interruptAgent, stopAgent, updateAgentModel } = useWebSocket();
+  const { createAgent, sendMessage, interruptAgent, stopAgent, updateAgentConfig, listCodexModels, readCodexThread, refreshCodexSessions } = useWebSocket();
 
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showCreateThread, setShowCreateThread] = useState(false);
@@ -362,6 +402,7 @@ function WorkspaceScreen({
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [showEditModel, setShowEditModel] = useState(false);
+  const [composerPicker, setComposerPicker] = useState<null | 'model' | 'speed' | 'reasoning'>(null);
   const [showAgentDashboard, setShowAgentDashboard] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [showUsageModal, setShowUsageModal] = useState(false);
@@ -372,15 +413,21 @@ function WorkspaceScreen({
   const previousStatusesRef = useRef<Record<string, string>>({});
   const statusBootstrappedRef = useRef(false);
   const notificationPermissionRef = useRef(false);
+  const codexThreadHydrationInFlight = useRef<Set<string>>(new Set());
 
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
-  const [newWorkspaceModel, setNewWorkspaceModel] = useState('gpt-5.1-codex');
+  const [newWorkspaceModel, setNewWorkspaceModel] = useState('gpt-5.4');
   const [newWorkspaceCwd, setNewWorkspaceCwd] = useState('/Users/apple/Work/DhruvalPersonal');
   const [newWorkspaceApprovalPolicy, setNewWorkspaceApprovalPolicy] = useState<'never' | 'on-request'>('never');
+  const [newWorkspaceServiceTier, setNewWorkspaceServiceTier] = useState<ServiceTier>('fast');
+  const [newWorkspaceReasoningEffort, setNewWorkspaceReasoningEffort] = useState<ReasoningEffort>('medium');
   const [newWorkspaceSystemPrompt, setNewWorkspaceSystemPrompt] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState(BUILT_IN_TEMPLATES[0].id);
+  const [customTemplates, setCustomTemplates] = useState<AgentTemplate[]>([]);
   const [customTemplateName, setCustomTemplateName] = useState('');
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [availableModels, setAvailableModels] = useState<CodexModelInfo[]>([]);
+  const [loadingModelCatalog, setLoadingModelCatalog] = useState(false);
   const [showDirectoryPicker, setShowDirectoryPicker] = useState(false);
   const [directoryEntries, setDirectoryEntries] = useState<Array<{ name: string; path: string }>>([]);
   const [directoryPath, setDirectoryPath] = useState('.');
@@ -406,6 +453,8 @@ function WorkspaceScreen({
   const [checkingHealth, setCheckingHealth] = useState(false);
   const [modelInput, setModelInput] = useState('');
   const [cwdInput, setCwdInput] = useState('');
+  const [serviceTierInput, setServiceTierInput] = useState<ServiceTier>('fast');
+  const [reasoningEffortInput, setReasoningEffortInput] = useState<ReasoningEffort>('medium');
   const [savingModel, setSavingModel] = useState(false);
   const [queueCollapsed, setQueueCollapsed] = useState(false);
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
@@ -450,7 +499,6 @@ function WorkspaceScreen({
     deliveredCount: number;
   }>>([]);
   const [failedSend, setFailedSend] = useState<{ text: string; error: string } | null>(null);
-  const [workspaceGraphEnabled, setWorkspaceGraphEnabled] = useState(false);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
   const [execLoaded, setExecLoaded] = useState(false);
@@ -461,7 +509,7 @@ function WorkspaceScreen({
   const [execModeInput, setExecModeInput] = useState<ExecModeType>('task');
   const [execPromptInput, setExecPromptInput] = useState('');
   const [execFlowInput, setExecFlowInput] = useState('');
-  const [execModelInput, setExecModelInput] = useState('gpt-5.1-codex');
+  const [execModelInput, setExecModelInput] = useState('gpt-5.4');
   const [execCwdInput, setExecCwdInput] = useState('/Users/apple/Work/DhruvalPersonal');
   const [execApprovalPolicyInput, setExecApprovalPolicyInput] = useState<'never' | 'on-request'>('never');
   const [execSystemPromptInput, setExecSystemPromptInput] = useState('');
@@ -477,8 +525,11 @@ function WorkspaceScreen({
 
   const openSidebar = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    if (connectionStatus === 'connected') {
+      void refreshCodexSessions();
+    }
     setShowSidebar(true);
-  }, []);
+  }, [connectionStatus, refreshCodexSessions]);
 
   const closeSidebar = useCallback(() => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -495,46 +546,88 @@ function WorkspaceScreen({
     () => activeWorkspace?.threads.find((thread) => thread.id === activeThreadId) || null,
     [activeWorkspace, activeThreadId],
   );
-  const liveWorkspaceGraph = useQuery(
-    api.persistence.getWorkspaceGraph,
-    workspaceGraphEnabled ? {} : 'skip',
-  );
-  const liveThreadMessages = useQuery(
-    api.persistence.getMessages,
-    activeThreadId ? { threadId: activeThreadId, limit: 50 } : 'skip',
-  );
-  const savedTemplates = useQuery(api.persistence.getTemplates, {}) || [];
-  const globalSearchResults = useQuery(
-    api.persistence.searchMessages,
-    searchScope === 'all' && searchQuery.trim().length >= 2
-      ? { query: searchQuery.trim() }
-      : 'skip',
-  );
-  const usageSummary = useQuery(api.persistence.getUsageSummary, {});
   const activeAgent = useAgentStore(
     useCallback((state) => {
       if (!activeThreadId) return null;
       return state.agents.find((agent) => agent.id === activeThreadId) || null;
     }, [activeThreadId]),
   );
+  const preferredModel = useMemo(() => preferredDefaultModel(availableModels), [availableModels]);
+  const availableModelOptions = useMemo(
+    () => availableModels.length > 0
+      ? sortCodexModels(availableModels).map((entry) => entry.model || entry.id)
+      : FALLBACK_MODEL_OPTIONS,
+    [availableModels],
+  );
+  const agentsById = useMemo(() => new Map(agents.map((agent) => [agent.id, agent])), [agents]);
+  const newWorkspaceModelInfo = useMemo(
+    () => findCodexModel(availableModels, newWorkspaceModel),
+    [availableModels, newWorkspaceModel],
+  );
+  const editModelInfo = useMemo(
+    () => findCodexModel(availableModels, modelInput.trim()),
+    [availableModels, modelInput],
+  );
+  const newWorkspaceReasoningOptions = useMemo(
+    () => reasoningOptionsForModel(newWorkspaceModelInfo),
+    [newWorkspaceModelInfo],
+  );
+  const editReasoningOptions = useMemo(
+    () => reasoningOptionsForModel(editModelInfo),
+    [editModelInfo],
+  );
 
   const connectionColor = connectionColors[connectionStatus] || colors.textMuted;
   const statusColor = activeAgent ? statusColors[activeAgent.status] || colors.textMuted : colors.textMuted;
-  const bottomInset = Math.min(Math.max(insets.bottom, 10), 18);
-  const availableTemplates = useMemo(() => {
-    const custom = savedTemplates
-      .filter((template) => !template.builtIn)
-      .map((template) => ({
-        id: template.id,
-        name: template.name,
-        model: template.model,
-        promptPrefix: template.promptPrefix,
-        icon: template.icon,
-        builtIn: false,
-        createdAt: template.createdAt,
-      }));
-    return [...BUILT_IN_TEMPLATES, ...custom];
-  }, [savedTemplates]);
+  const safeBottomInset = Number.isFinite(insets.bottom) ? insets.bottom : 0;
+  const bottomInset = Math.min(Math.max(safeBottomInset, 10), 18);
+  const availableTemplates = useMemo(() => [...BUILT_IN_TEMPLATES, ...customTemplates], [customTemplates]);
+  const globalSearchResults = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (searchScope !== 'all' || query.length < 2) return [];
+    return workspaces
+      .flatMap((workspace) =>
+        workspace.threads.flatMap((thread) => {
+          const agent = agents.find((entry) => entry.id === thread.id);
+          return (agent?.messages || [])
+            .filter((message) => message.text.toLowerCase().includes(query))
+            .map((message) => ({
+              id: `${thread.id}_${message._itemId || message.timestamp}`,
+              threadId: thread.id,
+              timestamp: message.timestamp,
+              itemId: message._itemId,
+              text: message.text,
+            }));
+        }))
+      .sort((left, right) => right.timestamp - left.timestamp);
+  }, [agents, searchQuery, searchScope, workspaces]);
+  const usageSummary = useMemo(() => {
+    const now = Date.now();
+    const dayAgo = now - 24 * 60 * 60 * 1000;
+    const weekAgo = now - 7 * 24 * 60 * 60 * 1000;
+    const userMessages = agents.flatMap((agent) =>
+      agent.messages
+        .filter((message) => message.role === 'user')
+        .map((message) => ({ agentId: agent.id, timestamp: message.timestamp })));
+    return {
+      messagesSentToday: userMessages.filter((message) => message.timestamp >= dayAgo).length,
+      messagesSentWeek: userMessages.filter((message) => message.timestamp >= weekAgo).length,
+      today: {
+        turns: userMessages.filter((message) => message.timestamp >= dayAgo).length,
+        estimatedCostUsd: 0,
+      },
+      week: {
+        turns: userMessages.filter((message) => message.timestamp >= weekAgo).length,
+        estimatedCostUsd: 0,
+      },
+      agents: agents.map((agent) => ({
+        agentId: agent.id,
+        averageResponseMs: 0,
+        errorCount: agent.status === 'error' ? 1 : 0,
+        activeTimeMs: 0,
+      })),
+    };
+  }, [agents]);
 
   useEffect(() => {
     const agents = useAgentStore.getState().agents.map((agent) => ({
@@ -543,6 +636,8 @@ function WorkspaceScreen({
       model: agent.model,
       cwd: agent.cwd,
       approvalPolicy: agent.approvalPolicy,
+      serviceTier: agent.serviceTier,
+      reasoningEffort: agent.reasoningEffort,
       systemPrompt: agent.systemPrompt,
     }));
     // Skip if a create is in flight — handleCreateWorkspace will call createWorkspace itself
@@ -650,7 +745,7 @@ function WorkspaceScreen({
   const openExecRunner = useCallback(() => {
     setShowMoreMenu(false);
     if (activeWorkspace) {
-      setExecModelInput(activeWorkspace.model || 'gpt-5.1-codex');
+      setExecModelInput(activeWorkspace.model || preferredModel);
       setExecCwdInput(activeWorkspace.cwd || '/Users/apple/Work/DhruvalPersonal');
       setExecApprovalPolicyInput(
         activeWorkspace.approvalPolicy === 'on-request' ? 'on-request' : 'never',
@@ -659,7 +754,41 @@ function WorkspaceScreen({
       setExecNameInput((current) => current || `${activeWorkspace.name} job`);
     }
     setShowExecRunner(true);
-  }, [activeWorkspace]);
+  }, [activeWorkspace, preferredModel]);
+
+  useEffect(() => {
+    if (connectionStatus !== 'connected') return;
+    let cancelled = false;
+
+    const loadCodexModels = async () => {
+      setLoadingModelCatalog(true);
+      try {
+        const models = await listCodexModels();
+        if (cancelled) return;
+        setAvailableModels(models);
+        const defaultModelId = preferredDefaultModel(models);
+        setNewWorkspaceModel((current) =>
+          current && (models.length === 0 || models.some((entry) => entry.model === current || entry.id === current))
+            ? current
+            : defaultModelId,
+        );
+        setExecModelInput((current) =>
+          current && (models.length === 0 || models.some((entry) => entry.model === current || entry.id === current))
+            ? current
+            : defaultModelId,
+        );
+      } catch {
+        if (!cancelled) setAvailableModels([]);
+      } finally {
+        if (!cancelled) setLoadingModelCatalog(false);
+      }
+    };
+
+    void loadCodexModels();
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionStatus, listCodexModels]);
 
   const applyExecPresetToForm = useCallback((preset: ExecPreset) => {
     setExecNameInput(preset.name);
@@ -677,7 +806,7 @@ function WorkspaceScreen({
     const mode = execModeInput;
     const prompt = execPromptInput.trim();
     const steps = parseFlowSteps(execFlowInput);
-    const model = execModelInput.trim() || 'gpt-5.1-codex';
+    const model = execModelInput.trim() || preferredModel;
     const cwd = execCwdInput.trim() || '/Users/apple/Work/DhruvalPersonal';
 
     if (!name) {
@@ -716,6 +845,7 @@ function WorkspaceScreen({
     execModelInput,
     execNameInput,
     execPromptInput,
+    preferredModel,
     execSystemPromptInput,
   ]);
 
@@ -726,7 +856,7 @@ function WorkspaceScreen({
   const handleRunExec = useCallback(async (preset?: ExecPreset) => {
     const mode = preset?.mode || execModeInput;
     const name = (preset?.name || execNameInput || '').trim() || 'Exec run';
-    const model = (preset?.model || execModelInput || '').trim() || 'gpt-5.1-codex';
+    const model = (preset?.model || execModelInput || '').trim() || preferredModel;
     const cwd = (preset?.cwd || execCwdInput || '').trim() || '/Users/apple/Work/DhruvalPersonal';
     const approvalPolicy = preset?.approvalPolicy || execApprovalPolicyInput;
     const systemPrompt = preset?.systemPrompt || execSystemPromptInput;
@@ -787,27 +917,7 @@ function WorkspaceScreen({
           firstThreadTitle: threadTitle,
           makeActive: false,
         });
-        await persistWorkspaceRecord({
-          id: workspaceId,
-          bridgeUrl,
-          name: 'Exec Mode',
-          model,
-          cwd,
-          approvalPolicy,
-          systemPrompt,
-          templateId: 'exec_mode',
-          templateIcon: 'flash',
-          createdAt: Date.now(),
-        });
       }
-
-      await persistThreadRecord({
-        id: createdAgent.id,
-        workspaceId,
-        title: threadTitle,
-        bridgeAgentId: createdAgent.id,
-        createdAt: Date.now(),
-      });
 
       await sendMessage(createdAgent.id, steps[0] || prompt);
       for (let i = 1; i < steps.length; i += 1) {
@@ -861,6 +971,7 @@ function WorkspaceScreen({
     execNameInput,
     execPromptInput,
     execSystemPromptInput,
+    preferredModel,
     sendMessage,
     workspaces,
   ]);
@@ -885,46 +996,7 @@ function WorkspaceScreen({
     };
   }, []);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setWorkspaceGraphEnabled(true), 240);
-    return () => clearTimeout(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!liveWorkspaceGraph) return;
-    const existingWorkspaces = useWorkspaceStore.getState().workspaces;
-    const existingActiveThreadByWorkspace = new Map(
-      existingWorkspaces.map((workspace) => [workspace.id, workspace.activeThreadId]),
-    );
-
-    const nextWorkspaces = liveWorkspaceGraph.map((workspace) => {
-      const threads = workspace.threads.map((thread) => ({
-        id: thread.id,
-        title: thread.title,
-        createdAt: thread.createdAt,
-      }));
-      const existingActiveThreadId = existingActiveThreadByWorkspace.get(workspace.id);
-      const activeThreadId = existingActiveThreadId && threads.some((thread) => thread.id === existingActiveThreadId)
-        ? existingActiveThreadId
-        : (threads[0]?.id || null);
-      return {
-        id: workspace.id,
-        name: workspace.name,
-        model: workspace.model,
-        cwd: workspace.cwd,
-        approvalPolicy: workspace.approvalPolicy,
-        systemPrompt: workspace.systemPrompt,
-        templateId: workspace.templateId,
-        templateIcon: workspace.templateIcon,
-        threads,
-        activeThreadId,
-        createdAt: workspace.createdAt,
-        updatedAt: threads[threads.length - 1]?.createdAt || workspace.createdAt,
-      };
-    });
-
-    setWorkspacesFromConvex(nextWorkspaces);
-  }, [liveWorkspaceGraph, setWorkspacesFromConvex]);
+  useEffect(() => undefined, []);
 
   useEffect(() => {
     const threadSnapshots = workspaces.flatMap((workspace) =>
@@ -934,6 +1006,8 @@ function WorkspaceScreen({
         model: workspace.model,
         cwd: workspace.cwd,
         approvalPolicy: workspace.approvalPolicy || 'never',
+        serviceTier: workspace.serviceTier || 'fast',
+        reasoningEffort: workspace.reasoningEffort || 'medium',
         systemPrompt: workspace.systemPrompt || '',
       })));
     if (!threadSnapshots.length) return;
@@ -954,6 +1028,8 @@ function WorkspaceScreen({
           model: thread.model,
           cwd: thread.cwd,
           approvalPolicy: thread.approvalPolicy,
+          serviceTier: thread.serviceTier,
+          reasoningEffort: thread.reasoningEffort,
           systemPrompt: thread.systemPrompt,
           status: 'stopped',
           threadId: null,
@@ -981,74 +1057,86 @@ function WorkspaceScreen({
     for (const threadId of threadsToHydrate) {
       bootstrappedThreadIds.current.add(threadId);
     }
-
-    let cancelled = false;
-    const hydrateThreadMessages = async () => {
-      const results = await Promise.all(
-        threadsToHydrate.map(async (threadId) => ({
-          threadId,
-          result: await fetchThreadMessages(threadId, { limit: 50 }),
-        })),
-      );
-      if (cancelled) return;
-
-      const latestAgents = useAgentStore.getState().agents;
-      const updatedById = new Map(latestAgents.map((agent) => [agent.id, agent]));
-      let hasChanges = false;
-
-      for (const { threadId, result } of results) {
-        const target = updatedById.get(threadId);
-        if (!target || target.messages.length > 0) continue;
-        const fetchedMessages = result?.messages || [];
-        if (!fetchedMessages.length) continue;
-        updatedById.set(threadId, {
-          ...target,
-          messages: fetchedMessages,
-        });
-        hasChanges = true;
-      }
-
-      if (hasChanges) {
-        setAgents(Array.from(updatedById.values()));
-      }
-    };
-
-    void hydrateThreadMessages();
-    return () => {
-      cancelled = true;
-    };
+    return;
   }, [setAgents, workspaces]);
 
   useEffect(() => {
-    if (!activeThreadId || !liveThreadMessages) return;
-    const liveMessages = liveThreadMessages.map((message) => ({
-      role: message.role,
-      type: message.type,
-      text: message.text,
-      timestamp: message.timestamp,
-      _itemId: message.itemId,
-      streaming: message.streaming,
-    })) as AgentMessage[];
+    if (!activeThreadId || !activeAgent?.syncedFromCodex) return;
+    if (activeAgent.messages.length > 0) return;
+    if (connectionStatus !== 'connected') return;
 
-    const localMessages = useAgentStore
-      .getState()
-      .agents.find((agent) => agent.id === activeThreadId)?.messages || [];
-    const mergedMessages = mergeLocalAndLiveMessages(localMessages, liveMessages);
+    const codexThreadId = activeAgent.codexThreadId || activeAgent.id;
+    if (!codexThreadId || codexThreadHydrationInFlight.current.has(codexThreadId)) return;
 
-    setAgentMessages(activeThreadId, mergedMessages);
-    const paging = threadPagingState.current[activeThreadId];
-    threadPagingState.current[activeThreadId] = {
-      oldestTimestamp: mergedMessages[0]?.timestamp || null,
-      hasMore: liveThreadMessages.length === 50,
-      loading: paging?.loading || false,
+    let cancelled = false;
+    codexThreadHydrationInFlight.current.add(codexThreadId);
+
+    const hydrateFromCodex = async () => {
+      try {
+        const detail = await readCodexThread(codexThreadId);
+        if (cancelled || !detail) return;
+
+        const nextAgents = useAgentStore.getState().agents.map((agent) =>
+          agent.id === activeAgent.id
+            ? {
+              ...agent,
+              model: detail.model || agent.model,
+              cwd: detail.cwd || agent.cwd,
+              approvalPolicy: detail.approvalPolicy || agent.approvalPolicy,
+              serviceTier: detail.serviceTier || agent.serviceTier,
+              reasoningEffort: detail.reasoningEffort || agent.reasoningEffort,
+              codexPath: detail.path || agent.codexPath,
+              source: detail.source || agent.source,
+              syncedFromCodex: true,
+              messages: agent.messages.length > 0 ? agent.messages : detail.messages,
+            }
+            : agent,
+        );
+        useAgentStore.getState().setAgents(nextAgents);
+
+        if (activeWorkspace) {
+          updateWorkspaceConfig(activeWorkspace.id, {
+            model: detail.model || activeWorkspace.model,
+            cwd: detail.cwd || activeWorkspace.cwd,
+            approvalPolicy: detail.approvalPolicy || activeWorkspace.approvalPolicy,
+            serviceTier: detail.serviceTier || activeWorkspace.serviceTier,
+            reasoningEffort: detail.reasoningEffort || activeWorkspace.reasoningEffort,
+          });
+        }
+      } catch {}
+      finally {
+        codexThreadHydrationInFlight.current.delete(codexThreadId);
+      }
     };
-  }, [activeThreadId, liveThreadMessages, setAgentMessages]);
+
+    void hydrateFromCodex();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeAgent, activeThreadId, activeWorkspace, connectionStatus, readCodexThread, updateWorkspaceConfig]);
 
   useEffect(() => {
     if (!showEditModel) return;
-    setModelInput(activeAgent?.model || activeWorkspace?.model || '');
+    setModelInput(activeAgent?.model || activeWorkspace?.model || preferredModel);
     setCwdInput(activeAgent?.cwd || activeWorkspace?.cwd || '');
-  }, [showEditModel, activeAgent?.id, activeAgent?.model, activeAgent?.cwd, activeWorkspace?.id, activeWorkspace?.model, activeWorkspace?.cwd]);
+    setServiceTierInput(activeAgent?.serviceTier || activeWorkspace?.serviceTier || 'fast');
+    setReasoningEffortInput(activeAgent?.reasoningEffort || activeWorkspace?.reasoningEffort || defaultReasoningForModel(editModelInfo));
+  }, [showEditModel, activeAgent?.id, activeAgent?.model, activeAgent?.cwd, activeAgent?.serviceTier, activeAgent?.reasoningEffort, activeWorkspace?.id, activeWorkspace?.model, activeWorkspace?.cwd, activeWorkspace?.serviceTier, activeWorkspace?.reasoningEffort, preferredModel, editModelInfo]);
+
+  useEffect(() => {
+    const nextDefaultReasoning = defaultReasoningForModel(newWorkspaceModelInfo);
+    if (!newWorkspaceReasoningOptions.includes(newWorkspaceReasoningEffort)) {
+      setNewWorkspaceReasoningEffort(nextDefaultReasoning);
+    }
+  }, [newWorkspaceModelInfo, newWorkspaceReasoningEffort, newWorkspaceReasoningOptions]);
+
+  useEffect(() => {
+    if (!showEditModel) return;
+    const nextDefaultReasoning = defaultReasoningForModel(editModelInfo);
+    if (!editReasoningOptions.includes(reasoningEffortInput)) {
+      setReasoningEffortInput(nextDefaultReasoning);
+    }
+  }, [showEditModel, editModelInfo, reasoningEffortInput, editReasoningOptions]);
 
   useEffect(() => {
     if (!activeThreadId || !activeAgent) return;
@@ -1058,7 +1146,8 @@ function WorkspaceScreen({
 
     const timer = setTimeout(() => {
       if (typeof saved?.offset === 'number') {
-        listRef.current?.scrollToOffset({ offset: Math.max(0, saved.offset), animated: false });
+        const safeOffset = Number.isFinite(saved.offset) ? Math.max(0, saved.offset) : 0;
+        listRef.current?.scrollToOffset({ offset: safeOffset, animated: false });
         return;
       }
       if (activeAgent.messages.length > 0) {
@@ -1069,64 +1158,9 @@ function WorkspaceScreen({
     return () => clearTimeout(timer);
   }, [activeThreadId, activeAgent?.id, activeAgent?.messages.length]);
 
-  useEffect(() => {
-    if (!activeThreadId) return;
-    if (liveThreadMessages) return;
-    let cancelled = false;
-
-    const loadMessages = async () => {
-      const convexResult = await fetchThreadMessages(activeThreadId, { limit: 50 });
-      if (cancelled || !convexResult) return;
-
-      threadPagingState.current[activeThreadId] = {
-        oldestTimestamp: convexResult.oldestTimestamp,
-        hasMore: convexResult.hasMore,
-        loading: false,
-      };
-
-      if (convexResult.messages.length === 0) return;
-      setAgentMessages(activeThreadId, convexResult.messages);
-    };
-
-    void loadMessages();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeThreadId, liveThreadMessages, setAgentMessages]);
-
   const loadOlderMessages = useCallback(async () => {
-    if (!activeThreadId) return;
-    const currentState = threadPagingState.current[activeThreadId];
-    if (!currentState || !currentState.hasMore || currentState.loading || currentState.oldestTimestamp === null) return;
-
-    threadPagingState.current[activeThreadId] = { ...currentState, loading: true };
-    setLoadingMoreMessages(true);
-
-    try {
-      const olderResult = await fetchThreadMessages(activeThreadId, {
-        limit: 50,
-        beforeTimestamp: currentState.oldestTimestamp,
-      });
-
-      if (!olderResult || olderResult.messages.length === 0) {
-        threadPagingState.current[activeThreadId] = {
-          ...threadPagingState.current[activeThreadId],
-          hasMore: false,
-          loading: false,
-        };
-        return;
-      }
-
-      prependAgentMessages(activeThreadId, olderResult.messages);
-      threadPagingState.current[activeThreadId] = {
-        oldestTimestamp: olderResult.oldestTimestamp,
-        hasMore: olderResult.hasMore,
-        loading: false,
-      };
-    } finally {
-      setLoadingMoreMessages(false);
-    }
-  }, [activeThreadId, prependAgentMessages]);
+    return;
+  }, []);
 
   useEffect(() => {
     setShowActivity(false);
@@ -1439,25 +1473,25 @@ function WorkspaceScreen({
     if (!name) return;
     setSavingTemplate(true);
     try {
-      await persistTemplateRecord({
+      setCustomTemplates((current) => [{
         id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
         name,
-        model: newWorkspaceModel.trim() || 'gpt-5.1-codex',
+        model: newWorkspaceModel.trim() || preferredModel,
         promptPrefix: newWorkspaceSystemPrompt.trim(),
         icon: 'custom',
         builtIn: false,
         createdAt: Date.now(),
-      });
+      }, ...current]);
       setCustomTemplateName('');
     } finally {
       setSavingTemplate(false);
     }
-  }, [customTemplateName, newWorkspaceModel, newWorkspaceSystemPrompt]);
+  }, [customTemplateName, newWorkspaceModel, newWorkspaceSystemPrompt, preferredModel]);
 
   const handleCreateWorkspace = async () => {
     if (createWorkspaceInFlight.current || creatingWorkspace) return;
     const name = newWorkspaceName.trim();
-    const model = newWorkspaceModel.trim() || 'gpt-5.1-codex';
+    const model = newWorkspaceModel.trim() || preferredModel;
     const cwd = newWorkspaceCwd.trim() || '/Users/apple/Work/DhruvalPersonal';
     const template = availableTemplates.find((entry) => entry.id === selectedTemplateId);
     if (!name) return;
@@ -1467,6 +1501,8 @@ function WorkspaceScreen({
     try {
       const agent = await createAgent(name, model, cwd, {
         approvalPolicy: newWorkspaceApprovalPolicy,
+        serviceTier: newWorkspaceServiceTier,
+        reasoningEffort: newWorkspaceReasoningEffort,
         systemPrompt: newWorkspaceSystemPrompt.trim(),
       });
       const workspaceId = createWorkspace({
@@ -1474,35 +1510,20 @@ function WorkspaceScreen({
         model,
         cwd,
         approvalPolicy: newWorkspaceApprovalPolicy,
+        serviceTier: newWorkspaceServiceTier,
+        reasoningEffort: newWorkspaceReasoningEffort,
         systemPrompt: newWorkspaceSystemPrompt.trim(),
         templateId: template?.id,
         templateIcon: template?.icon,
         firstThreadAgentId: agent.id,
         firstThreadTitle: 'Thread 1',
       });
-      const createdAt = Date.now();
-      await persistWorkspaceRecord({
-        id: workspaceId,
-        bridgeUrl,
-        name,
-        model,
-        cwd,
-        approvalPolicy: newWorkspaceApprovalPolicy,
-        systemPrompt: newWorkspaceSystemPrompt.trim(),
-        templateId: template?.id,
-        templateIcon: template?.icon,
-        createdAt,
-      });
-      await persistThreadRecord({
-        id: agent.id,
-        workspaceId,
-        title: 'Thread 1',
-        bridgeAgentId: agent.id,
-        createdAt,
-      });
       setNewWorkspaceName('');
+      setNewWorkspaceModel(preferredModel);
       setNewWorkspaceSystemPrompt('');
       setNewWorkspaceApprovalPolicy('never');
+      setNewWorkspaceServiceTier('fast');
+      setNewWorkspaceReasoningEffort(defaultReasoningForModel(findCodexModel(availableModels, preferredModel)));
       setSelectedTemplateId(BUILT_IN_TEMPLATES[0].id);
     } catch (err: any) {
       Alert.alert('Error', toUserErrorMessage(err, 'Failed to create workspace'));
@@ -1525,6 +1546,8 @@ function WorkspaceScreen({
     try {
       const agent = await createAgent(activeWorkspace.name, model, cwd, {
         approvalPolicy: activeWorkspace.approvalPolicy || 'never',
+        serviceTier: activeWorkspace.serviceTier || 'fast',
+        reasoningEffort: activeWorkspace.reasoningEffort || 'medium',
         systemPrompt: activeWorkspace.systemPrompt || '',
       });
       addThreadToWorkspace({
@@ -1532,13 +1555,6 @@ function WorkspaceScreen({
         threadAgentId: agent.id,
         title,
         makeActive: true,
-      });
-      await persistThreadRecord({
-        id: agent.id,
-        workspaceId: activeWorkspace.id,
-        title,
-        bridgeAgentId: agent.id,
-        createdAt: Date.now(),
       });
       setNewThreadTitle('');
     } catch (err: any) {
@@ -1728,6 +1744,8 @@ function WorkspaceScreen({
     if (!activeAgent) return;
     const nextModel = modelInput.trim();
     const nextCwd = cwdInput.trim();
+    const nextServiceTier = serviceTierInput;
+    const nextReasoningEffort = reasoningEffortInput;
     if (!nextModel) {
       Alert.alert('Invalid model', 'Model cannot be empty.');
       return;
@@ -1738,32 +1756,27 @@ function WorkspaceScreen({
     }
     const modelChanged = nextModel !== activeAgent.model;
     const cwdChanged = nextCwd !== (activeAgent.cwd || activeWorkspace?.cwd);
-    if (!modelChanged && !cwdChanged) {
+    const serviceTierChanged = nextServiceTier !== (activeAgent.serviceTier || activeWorkspace?.serviceTier || 'fast');
+    const reasoningEffortChanged = nextReasoningEffort !== (activeAgent.reasoningEffort || activeWorkspace?.reasoningEffort || 'medium');
+    if (!modelChanged && !cwdChanged && !serviceTierChanged && !reasoningEffortChanged) {
       setShowEditModel(false);
       return;
     }
 
     setSavingModel(true);
     try {
-      if (modelChanged) {
-        await updateAgentModel(activeAgent.id, nextModel);
-      }
+      await updateAgentConfig(activeAgent.id, {
+        ...(modelChanged ? { model: nextModel } : {}),
+        ...(cwdChanged ? { cwd: nextCwd } : {}),
+        ...(serviceTierChanged ? { serviceTier: nextServiceTier } : {}),
+        ...(reasoningEffortChanged ? { reasoningEffort: nextReasoningEffort } : {}),
+      });
       if (activeWorkspace) {
         updateWorkspaceConfig(activeWorkspace.id, {
           ...(modelChanged ? { model: nextModel } : {}),
           ...(cwdChanged ? { cwd: nextCwd } : {}),
-        });
-        await persistWorkspaceRecord({
-          id: activeWorkspace.id,
-          bridgeUrl,
-          name: activeWorkspace.name,
-          model: modelChanged ? nextModel : activeWorkspace.model,
-          cwd: cwdChanged ? nextCwd : activeWorkspace.cwd,
-          approvalPolicy: activeWorkspace.approvalPolicy,
-          systemPrompt: activeWorkspace.systemPrompt,
-          templateId: activeWorkspace.templateId,
-          templateIcon: activeWorkspace.templateIcon,
-          createdAt: activeWorkspace.createdAt,
+          ...(serviceTierChanged ? { serviceTier: nextServiceTier } : {}),
+          ...(reasoningEffortChanged ? { reasoningEffort: nextReasoningEffort } : {}),
         });
       }
     } catch (err: any) {
@@ -1773,6 +1786,25 @@ function WorkspaceScreen({
       setSavingModel(false);
     }
   };
+
+  const handleComposerConfigChange = useCallback(async (
+    config: { model?: string; serviceTier?: ServiceTier; reasoningEffort?: ReasoningEffort },
+  ) => {
+    if (!activeAgent) return;
+    try {
+      await updateAgentConfig(activeAgent.id, config);
+      if (activeWorkspace) {
+        updateWorkspaceConfig(activeWorkspace.id, {
+          ...(config.model ? { model: config.model } : {}),
+          ...(config.serviceTier ? { serviceTier: config.serviceTier } : {}),
+          ...(config.reasoningEffort ? { reasoningEffort: config.reasoningEffort } : {}),
+        });
+      }
+      setComposerPicker(null);
+    } catch (err: any) {
+      Alert.alert('Error', toUserErrorMessage(err, 'Failed to update agent config'));
+    }
+  }, [activeAgent, activeWorkspace, updateAgentConfig, updateWorkspaceConfig]);
 
   const handleEditQueuedMessage = useCallback((item: QueuedMessage) => {
     setEditingQueueItem({ id: item.id, text: item.text });
@@ -2089,7 +2121,7 @@ function WorkspaceScreen({
     return base.filter((msg) => (msg.text || '').toLowerCase().includes(normalizedSearch));
   }, [activeAgent, normalizedSearch, searchScope, showActivity]);
   const hasAnyMessages = (activeAgent?.messages.length || 0) > 0;
-  const isThreadHydrating = !!activeThreadId && !liveThreadMessages && !hasAnyMessages;
+  const isThreadHydrating = !!activeThreadId && !!activeAgent?.syncedFromCodex && !hasAnyMessages;
   const typingLabel = useMemo(() => {
     if (!activeAgent || activeAgent.status !== 'working') return 'Working';
     if (activeAgent.activityLabel?.trim()) return activeAgent.activityLabel.trim();
@@ -2199,13 +2231,6 @@ function WorkspaceScreen({
       );
       setAgents(nextAgents);
       replaceThreadAgentId(workspaceId, threadId, newAgent.id);
-      await persistThreadRecord({
-        id: newAgent.id,
-        workspaceId,
-        title: workspace.threads.find((thread) => thread.id === threadId)?.title || 'Thread',
-        bridgeAgentId: newAgent.id,
-        createdAt: Date.now(),
-      });
     } catch (err: any) {
       Alert.alert('Restart failed', toUserErrorMessage(err, 'Could not restart agent'));
     }
@@ -2261,7 +2286,6 @@ function WorkspaceScreen({
         style: 'destructive',
         onPress: () => {
           removeMessage(activeAgent.id, message);
-          void deletePersistedMessage(activeAgent.id, message);
         },
       },
       { text: 'Cancel', style: 'cancel' },
@@ -2365,7 +2389,7 @@ function WorkspaceScreen({
 
       <Text style={[s.metaInline, { color: statusColor }]} numberOfLines={1}>
         {activeWorkspace
-          ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}${gitStatus?.branch ? ` • ${gitStatus.branch} ${gitStatus.isClean ? 'clean' : 'dirty'}` : ''}`
+          ? `${activeWorkspace.model} • ${labelForServiceTier(activeAgent?.serviceTier || activeWorkspace.serviceTier || 'fast')} • ${labelForReasoning(activeAgent?.reasoningEffort || activeWorkspace.reasoningEffort || 'medium')} • ${compactPath(activeWorkspace.cwd)} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}${gitStatus?.branch ? ` • ${gitStatus.branch} ${gitStatus.isClean ? 'clean' : 'dirty'}` : ''}`
           : getConnectionLabel(connectionStatus)}
       </Text>
       {connectionStatus !== 'connected' && (
@@ -2499,8 +2523,9 @@ function WorkspaceScreen({
             removeClippedSubviews={true}
             scrollEventThrottle={16}
             onScrollToIndexFailed={(info) => {
+              const averageItemLength = Number.isFinite(info.averageItemLength) ? info.averageItemLength : 0;
               listRef.current?.scrollToOffset({
-                offset: Math.max(0, info.averageItemLength * info.index),
+                offset: Math.max(0, averageItemLength * info.index),
                 animated: true,
               });
             }}
@@ -2555,6 +2580,27 @@ function WorkspaceScreen({
         </View>
       )}
 
+      {!!activeAgent && (
+        <View style={s.composerConfigBar}>
+          <Pressable style={s.composerConfigChip} onPress={() => setComposerPicker('model')}>
+            <Text style={s.composerConfigLabel}>Model</Text>
+            <Text style={s.composerConfigValue} numberOfLines={1}>{activeAgent.model}</Text>
+          </Pressable>
+          <Pressable style={s.composerConfigChip} onPress={() => setComposerPicker('speed')}>
+            <Text style={s.composerConfigLabel}>Speed</Text>
+            <Text style={s.composerConfigValue} numberOfLines={1}>
+              {labelForServiceTier(activeAgent.serviceTier || activeWorkspace?.serviceTier || 'fast')}
+            </Text>
+          </Pressable>
+          <Pressable style={s.composerConfigChip} onPress={() => setComposerPicker('reasoning')}>
+            <Text style={s.composerConfigLabel}>Reasoning</Text>
+            <Text style={s.composerConfigValue} numberOfLines={1}>
+              {labelForReasoning(activeAgent.reasoningEffort || activeWorkspace?.reasoningEffort || 'medium')}
+            </Text>
+          </Pressable>
+        </View>
+      )}
+
       <MessageInput
         onSend={handleInputSend}
         onInterrupt={() => activeAgent && interruptAgent(activeAgent.id)}
@@ -2565,6 +2611,62 @@ function WorkspaceScreen({
         onResolveFileMentions={resolveFilenameMentions}
         colors={colors}
       />
+
+      <Modal visible={composerPicker !== null} transparent={true} animationType="fade" onRequestClose={() => setComposerPicker(null)}>
+        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={s.modal}>
+            <Text style={s.modalTitle}>
+              {composerPicker === 'model' ? 'Choose Model' : composerPicker === 'speed' ? 'Choose Speed' : 'Choose Reasoning'}
+            </Text>
+            <ScrollView style={s.fileListWrap}>
+              {composerPicker === 'model' && availableModelOptions.map((model) => {
+                const selected = model === (activeAgent?.model || activeWorkspace?.model);
+                return (
+                  <Pressable
+                    key={model}
+                    style={[s.composerOptionRow, selected && s.composerOptionRowActive]}
+                    onPress={() => void handleComposerConfigChange({
+                      model,
+                      reasoningEffort: defaultReasoningForModel(findCodexModel(availableModels, model)),
+                    })}
+                  >
+                    <Text style={[s.composerOptionTitle, selected && s.modelOptionTextActive]}>{model}</Text>
+                  </Pressable>
+                );
+              })}
+              {composerPicker === 'speed' && SERVICE_TIER_OPTIONS.map((option) => {
+                const selected = option.value === (activeAgent?.serviceTier || activeWorkspace?.serviceTier || 'fast');
+                return (
+                  <Pressable
+                    key={option.value}
+                    style={[s.composerOptionRow, selected && s.composerOptionRowActive]}
+                    onPress={() => void handleComposerConfigChange({ serviceTier: option.value })}
+                  >
+                    <Text style={[s.composerOptionTitle, selected && s.modelOptionTextActive]}>{option.label}</Text>
+                  </Pressable>
+                );
+              })}
+              {composerPicker === 'reasoning' && reasoningOptionsForModel(findCodexModel(availableModels, activeAgent?.model || activeWorkspace?.model || preferredModel)).map((effort) => {
+                const selected = effort === (activeAgent?.reasoningEffort || activeWorkspace?.reasoningEffort || 'medium');
+                return (
+                  <Pressable
+                    key={effort}
+                    style={[s.composerOptionRow, selected && s.composerOptionRowActive]}
+                    onPress={() => void handleComposerConfigChange({ reasoningEffort: effort })}
+                  >
+                    <Text style={[s.composerOptionTitle, selected && s.modelOptionTextActive]}>{labelForReasoning(effort)}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            <View style={s.modalActions}>
+              <Pressable style={s.cancelBtn} onPress={() => setComposerPicker(null)}>
+                <Text style={s.cancelText}>Close</Text>
+              </Pressable>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {showSidebar && (
         <View style={s.sidebarOverlay}>
@@ -2579,7 +2681,7 @@ function WorkspaceScreen({
             <ScrollView style={s.sidebarContent} showsVerticalScrollIndicator={false}>
               <View style={s.sidebarSection}>
                 <View style={s.sidebarSectionHeader}>
-                  <Text style={s.sidebarSectionTitle}>Agents</Text>
+                  <Text style={s.sidebarSectionTitle}>Projects</Text>
                   <Pressable style={s.linkActionBtn} onPress={() => setShowCreateWorkspace(true)}>
                     <Text style={s.linkActionText}>+ New</Text>
                   </Pressable>
@@ -2587,6 +2689,10 @@ function WorkspaceScreen({
                 {workspaces.map((workspace) => {
                   const isActive = workspace.id === activeWorkspace?.id;
                   const isExpanded = expandedWorkspaceId === workspace.id;
+                  const workspaceAgents = workspace.threads
+                    .map((thread) => agentsById.get(thread.id))
+                    .filter(Boolean) as Agent[];
+                  const syncedCount = workspaceAgents.filter((agent) => agent.syncedFromCodex).length;
                   return (
                     <View key={workspace.id} style={[s.workspaceCard, isActive && s.workspaceCardActive]}>
                       <View style={s.workspaceCardHeader}>
@@ -2603,7 +2709,7 @@ function WorkspaceScreen({
                                 {workspace.name}
                               </Text>
                               <Text style={[s.sidebarItemMeta, isActive && s.sidebarItemMetaActive]} numberOfLines={1}>
-                                {workspace.model} • {workspace.threads.length} threads
+                                {compactPath(workspace.cwd)} • {workspace.threads.length} threads{syncedCount > 0 ? ` • Mac sync ${syncedCount}` : ''}
                               </Text>
                             </View>
                           </View>
@@ -2651,6 +2757,7 @@ function WorkspaceScreen({
                         <View style={s.threadDropdown}>
                           {workspace.threads.map((thread) => {
                             const isThreadActive = isActive && thread.id === activeThreadId;
+                            const threadAgent = agentsById.get(thread.id);
                             return (
                               <Pressable
                                 key={thread.id}
@@ -2670,7 +2777,14 @@ function WorkspaceScreen({
                                         {thread.title}
                                       </Text>
                                       <Text style={[s.threadMeta, isThreadActive && s.threadMetaActive]} numberOfLines={1}>
-                                        {thread.id.slice(0, 8)}
+                                        {[
+                                          threadAgent?.model || workspace.model,
+                                          labelForServiceTier(threadAgent?.serviceTier || workspace.serviceTier || 'fast'),
+                                          labelForReasoning(threadAgent?.reasoningEffort || workspace.reasoningEffort || 'medium'),
+                                          threadAgent?.syncedFromCodex
+                                            ? compactPath(threadAgent.codexPath || threadAgent.cwd)
+                                            : thread.id.slice(0, 8),
+                                        ].filter(Boolean).join(' • ')}
                                       </Text>
                                     </View>
                                   </View>
@@ -2844,7 +2958,7 @@ function WorkspaceScreen({
 
               <Text style={s.label}>Model</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.modelOptionRow, { marginBottom: 8 }]}>
-                {MODEL_OPTIONS.map((model) => {
+                {availableModelOptions.map((model) => {
                   const selected = newWorkspaceModel === model;
                   return (
                     <Pressable
@@ -2857,6 +2971,11 @@ function WorkspaceScreen({
                   );
                 })}
               </ScrollView>
+              <Text style={s.themeHint}>
+                {loadingModelCatalog
+                  ? 'Loading models from Codex on your Mac...'
+                  : `${availableModelOptions.length} model${availableModelOptions.length === 1 ? '' : 's'} synced from Codex on your Mac.`}
+              </Text>
               <TextInput
                 style={s.input}
                 value={newWorkspaceModel}
@@ -2866,6 +2985,40 @@ function WorkspaceScreen({
                 autoCapitalize="none"
                 autoCorrect={false}
               />
+
+              <Text style={s.label}>Speed</Text>
+              <View style={s.themeModeRow}>
+                {SERVICE_TIER_OPTIONS.map((option) => (
+                  <Pressable
+                    key={option.value}
+                    style={[s.themeModeChip, newWorkspaceServiceTier === option.value && s.themeModeChipActive]}
+                    onPress={() => setNewWorkspaceServiceTier(option.value)}
+                  >
+                    <Text style={[s.themeModeChipText, newWorkspaceServiceTier === option.value && s.themeModeChipTextActive]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Text style={s.label}>Reasoning</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.modelOptionRow, { marginBottom: 8 }]}>
+                {newWorkspaceReasoningOptions.map((effort) => {
+                  const selected = newWorkspaceReasoningEffort === effort;
+                  return (
+                    <Pressable
+                      key={effort}
+                      style={[s.modelOptionChip, selected && s.modelOptionChipActive]}
+                      onPress={() => setNewWorkspaceReasoningEffort(effort)}
+                    >
+                      <Text style={[s.modelOptionText, selected && s.modelOptionTextActive]}>{labelForReasoning(effort)}</Text>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              <Text style={s.themeHint}>
+                {newWorkspaceModelInfo?.description || `Reasoning controls exposed by ${newWorkspaceModel || preferredModel}.`}
+              </Text>
 
               <Text style={s.label}>Working Directory</Text>
               <TextInput
@@ -3530,7 +3683,7 @@ function WorkspaceScreen({
                 style={s.input}
                 value={execModelInput}
                 onChangeText={setExecModelInput}
-                placeholder="gpt-5.1-codex"
+                placeholder={preferredModel}
                 placeholderTextColor={colors.textMuted}
                 autoCorrect={false}
                 autoCapitalize="none"
@@ -3794,16 +3947,64 @@ function WorkspaceScreen({
           <View style={s.modal}>
             <Text style={s.modalTitle}>Edit Agent</Text>
             <Text style={s.label}>Model</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.modelOptionRow, { marginBottom: 8 }]}>
+              {availableModelOptions.map((model) => {
+                const selected = modelInput === model;
+                return (
+                  <Pressable
+                    key={model}
+                    style={[s.modelOptionChip, selected && s.modelOptionChipActive]}
+                    onPress={() => setModelInput(model)}
+                  >
+                    <Text style={[s.modelOptionText, selected && s.modelOptionTextActive]}>{model}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
             <TextInput
               style={s.input}
               value={modelInput}
               onChangeText={setModelInput}
-              placeholder="gpt-5.1-codex"
+              placeholder={preferredModel}
               placeholderTextColor={colors.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
               autoFocus={true}
             />
+            <Text style={s.label}>Speed</Text>
+            <View style={s.themeModeRow}>
+              {SERVICE_TIER_OPTIONS.map((option) => (
+                <Pressable
+                  key={option.value}
+                  style={[s.themeModeChip, serviceTierInput === option.value && s.themeModeChipActive]}
+                  onPress={() => setServiceTierInput(option.value)}
+                >
+                  <Text style={[s.themeModeChipText, serviceTierInput === option.value && s.themeModeChipTextActive]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={s.label}>Reasoning</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={[s.modelOptionRow, { marginBottom: 8 }]}>
+              {editReasoningOptions.map((effort) => {
+                const selected = reasoningEffortInput === effort;
+                return (
+                  <Pressable
+                    key={effort}
+                    style={[s.modelOptionChip, selected && s.modelOptionChipActive]}
+                    onPress={() => setReasoningEffortInput(effort)}
+                  >
+                    <Text style={[s.modelOptionText, selected && s.modelOptionTextActive]}>{labelForReasoning(effort)}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+            {!!activeAgent?.syncedFromCodex && (
+              <Text style={s.themeHint}>
+                Synced from Mac session • {compactPath(activeAgent.codexPath || activeAgent.cwd)}
+              </Text>
+            )}
             <Text style={s.label}>Working Directory</Text>
             <TextInput
               style={s.input}
@@ -3951,11 +4152,9 @@ function AppContent() {
 
 function App() {
   return (
-    <ConvexProvider client={convexClient}>
-      <AppErrorBoundary>
-        <AppContent />
-      </AppErrorBoundary>
-    </ConvexProvider>
+    <AppErrorBoundary>
+      <AppContent />
+    </AppErrorBoundary>
   );
 }
 
@@ -5205,6 +5404,50 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     gap: 8,
     marginTop: 4,
     marginBottom: 10,
+  },
+  composerConfigBar: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingBottom: 8,
+  },
+  composerConfigChip: {
+    flex: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: colors.surfaceSubtle,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  composerConfigLabel: {
+    color: colors.textMuted,
+    fontSize: 11,
+    fontFamily: typography.semibold,
+    marginBottom: 2,
+  },
+  composerConfigValue: {
+    color: colors.textPrimary,
+    fontSize: 12,
+    fontFamily: typography.semibold,
+  },
+  composerOptionRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSubtle,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  composerOptionRowActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.surfaceElevated,
+  },
+  composerOptionTitle: {
+    color: colors.textPrimary,
+    fontSize: 14,
+    fontFamily: typography.semibold,
   },
   modalActions: {
     flexDirection: 'row',

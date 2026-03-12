@@ -54,23 +54,76 @@ export function initializedNotification(): string {
 }
 
 // Thread operations
-export function threadStartRequest(model: string, cwd?: string, approvalPolicy = 'never'): string {
+export function threadStartRequest(
+  model: string,
+  cwd?: string,
+  approvalPolicy = 'never',
+  serviceTier?: string,
+): string {
   const params: Record<string, unknown> = {
     model,
     approvalPolicy,
     sandbox: 'danger-full-access',
   };
   if (cwd) params.cwd = cwd;
+  if (serviceTier) params.serviceTier = serviceTier;
   return createRequest('thread/start', params);
 }
 
+export function threadResumeRequest(
+  threadId: string,
+  options: {
+    model?: string;
+    cwd?: string;
+    approvalPolicy?: string;
+    serviceTier?: string;
+  } = {},
+): string {
+  const params: Record<string, unknown> = { threadId };
+  if (options.model) params.model = options.model;
+  if (options.cwd) params.cwd = options.cwd;
+  if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
+  if (options.serviceTier) params.serviceTier = options.serviceTier;
+  return createRequest('thread/resume', params);
+}
+
+export function threadListRequest(params: {
+  limit?: number;
+  cursor?: string;
+  cwd?: string;
+} = {}): string {
+  return createRequest('thread/list', params);
+}
+
+export function threadReadRequest(threadId: string, includeTurns = true): string {
+  return createRequest('thread/read', { threadId, includeTurns });
+}
+
+export function modelListRequest(includeHidden = true): string {
+  return createRequest('model/list', { includeHidden });
+}
+
 // Turn operations
-export function turnStartRequest(threadId: string, text: string, model?: string): string {
+export function turnStartRequest(
+  threadId: string,
+  text: string,
+  options: {
+    model?: string;
+    effort?: string;
+    serviceTier?: string;
+    approvalPolicy?: string;
+    cwd?: string;
+  } = {},
+): string {
   const params: Record<string, unknown> = {
     threadId,
     input: [{ type: 'text', text }],
   };
-  if (model) params.model = model;
+  if (options.model) params.model = options.model;
+  if (options.effort) params.effort = options.effort;
+  if (options.serviceTier) params.serviceTier = options.serviceTier;
+  if (options.approvalPolicy) params.approvalPolicy = options.approvalPolicy;
+  if (options.cwd) params.cwd = options.cwd;
   return createRequest('turn/start', params);
 }
 

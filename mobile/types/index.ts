@@ -1,4 +1,6 @@
 export type AgentStatus = 'initializing' | 'ready' | 'working' | 'error' | 'stopped';
+export type ServiceTier = 'fast' | 'flex' | string;
+export type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | string;
 
 export type MessageType = 'user' | 'agent' | 'thinking' | 'command' | 'command_output' | 'file_change';
 
@@ -23,12 +25,18 @@ export interface Agent {
   model: string;
   cwd: string;
   approvalPolicy?: 'never' | 'on-request' | string;
+  serviceTier?: ServiceTier;
+  reasoningEffort?: ReasoningEffort;
   systemPrompt?: string;
   status: AgentStatus;
   activityLabel?: string;
   queuedMessages?: QueuedMessage[];
   threadId: string | null;
   currentTurnId: string | null;
+  codexThreadId?: string | null;
+  codexPath?: string | null;
+  source?: string | null;
+  syncedFromCodex?: boolean;
   messages: AgentMessage[];
 }
 
@@ -44,6 +52,8 @@ export interface AgentWorkspace {
   model: string;
   cwd: string;
   approvalPolicy?: 'never' | 'on-request' | string;
+  serviceTier?: ServiceTier;
+  reasoningEffort?: ReasoningEffort;
   systemPrompt?: string;
   templateId?: string;
   templateIcon?: string;
@@ -79,4 +89,40 @@ export interface BridgeResponse {
   error?: string;
   agentId?: string;
   event?: string;
+}
+
+export interface CodexThreadSummary {
+  id: string;
+  name: string | null;
+  preview: string;
+  cwd: string;
+  path: string;
+  source: string | null;
+  createdAt: number;
+  updatedAt: number;
+  status: string;
+}
+
+export interface CodexThreadDetail extends CodexThreadSummary {
+  model: string;
+  approvalPolicy: string;
+  serviceTier: ServiceTier;
+  reasoningEffort: ReasoningEffort;
+  messages: AgentMessage[];
+}
+
+export interface CodexModelInfo {
+  id: string;
+  model: string;
+  displayName: string;
+  description: string;
+  hidden: boolean;
+  defaultReasoningEffort: ReasoningEffort;
+  supportedReasoningEfforts: Array<{
+    reasoningEffort: ReasoningEffort;
+    description: string;
+  }>;
+  isDefault: boolean;
+  supportsPersonality: boolean;
+  inputModalities: string[];
 }
