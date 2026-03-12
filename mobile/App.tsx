@@ -4,13 +4,10 @@ import {
   Text,
   FlatList,
   Pressable,
-  Modal,
-  TextInput,
   StyleSheet,
   Alert,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   useColorScheme,
   AppState,
   Share,
@@ -27,7 +24,7 @@ import * as Notifications from 'expo-notifications';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
 import {
   Manrope_400Regular,
@@ -46,13 +43,55 @@ import { useWebSocket, sendMessageToAgent, sendRequest } from './hooks/useWebSoc
 import { ChatBubble } from './components/ChatBubble';
 import { QueuePanel } from './components/QueuePanel';
 import { MessageInput } from './components/MessageInput';
-import { TypingIndicator } from './components/TypingIndicator';
 import { AppErrorBoundary } from './components/AppErrorBoundary';
+import { WorkspaceSidebar } from './components/workspace/WorkspaceSidebar';
+import { OnboardingModal } from './components/workspace/OnboardingModal';
+import { CreateWorkspaceModal } from './components/workspace/CreateWorkspaceModal';
+import { DirectoryPickerModal } from './components/workspace/DirectoryPickerModal';
+import { RepoManagerModal } from './components/workspace/RepoManagerModal';
+import { CreateThreadModal } from './components/workspace/CreateThreadModal';
+import { FileBrowserModal } from './components/workspace/FileBrowserModal';
+import { GitModal } from './components/workspace/GitModal';
+import { ExecRunnerModal } from './components/workspace/ExecRunnerModal';
+import { AgentDashboardModal } from './components/workspace/AgentDashboardModal';
+import { UsageAnalyticsModal } from './components/workspace/UsageAnalyticsModal';
+import { NotificationsModal } from './components/workspace/NotificationsModal';
+import { QrScannerModal } from './components/workspace/QrScannerModal';
+import { SettingsModal } from './components/workspace/SettingsModal';
+import { EditAgentModal } from './components/workspace/EditAgentModal';
+import { EditQueuedMessageModal } from './components/workspace/EditQueuedMessageModal';
+import { WorkspaceHeader } from './components/workspace/WorkspaceHeader';
+import { WorkspaceConversation } from './components/workspace/WorkspaceConversation';
+import { WorkspaceMoreMenuModal } from './components/workspace/WorkspaceMoreMenuModal';
 import { setWidgetSummary, clearWidgetSummary } from 'taskdex-widget-bridge';
 import type { Agent, AgentMessage, AgentTemplate, CodexModelInfo, QueuedMessage, ReasoningEffort, ServiceTier } from './types';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
 import atomOneDark from 'react-syntax-highlighter/styles/hljs/atom-one-dark';
 import atomOneLight from 'react-syntax-highlighter/styles/hljs/atom-one-light';
+import {
+import type { Agent, AgentMessage, QueuedMessage, AgentTemplate } from './types';
+import { api } from './convex/_generated/api';
+import {
+  convexClient,
+  fetchThreadMessages,
+  deletePersistedMessage,
+  persistWorkspaceRecord,
+  persistThreadRecord,
+  persistTemplateRecord,
+} from './lib/convexClient';
+import type {
+  DashboardAgentRow,
+  ExecModeType,
+  ExecPreset,
+  ExecRunRecord,
+  GitStatusInfo,
+  NotificationHistoryEntry,
+  NotificationLevel,
+  WorkspaceApprovalPolicy,
+  WorkspaceFileEntry,
+  WorkspaceSearchResult,
+} from './features/workspace/types';
+import { useWorkspaceRepoDirectory } from './features/workspace/hooks/useWorkspaceRepoDirectory';
 import {
   getConnectionColors,
   getPalette,
@@ -100,12 +139,6 @@ function getConnectionLabel(status: string) {
   if (status === 'connected') return 'Connected to bridge';
   if (status === 'connecting') return 'Connecting to bridge...';
   return 'Disconnected from bridge';
-}
-
-function formatNotificationTimestamp(value: number): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString();
 }
 
 function extractThreadIdFromUrl(url: string): string | null {
@@ -163,20 +196,6 @@ function toUserErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function guessLanguageFromPath(filePath: string): string {
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith('.ts') || lower.endsWith('.tsx')) return 'typescript';
-  if (lower.endsWith('.js') || lower.endsWith('.jsx')) return 'javascript';
-  if (lower.endsWith('.json')) return 'json';
-  if (lower.endsWith('.md')) return 'markdown';
-  if (lower.endsWith('.py')) return 'python';
-  if (lower.endsWith('.sh')) return 'bash';
-  if (lower.endsWith('.yml') || lower.endsWith('.yaml')) return 'yaml';
-  if (lower.endsWith('.css')) return 'css';
-  if (lower.endsWith('.html')) return 'html';
-  return 'text';
-}
-
 const BUILT_IN_TEMPLATES: AgentTemplate[] = [
   {
     id: 'builtin_bug_fixer',
@@ -216,37 +235,6 @@ const SERVICE_TIER_OPTIONS: Array<{ value: ServiceTier; label: string }> = [
 const EXEC_PRESETS_KEY = 'taskdex_exec_presets_v1';
 const EXEC_RUNS_KEY = 'taskdex_exec_runs_v1';
 
-type ExecModeType = 'task' | 'flow';
-type ExecRunStatus = 'starting' | 'running' | 'completed' | 'failed';
-
-interface ExecPreset {
-  id: string;
-  name: string;
-  mode: ExecModeType;
-  prompt: string;
-  steps: string[];
-  model: string;
-  cwd: string;
-  approvalPolicy: 'never' | 'on-request';
-  systemPrompt: string;
-  createdAt: number;
-  updatedAt: number;
-}
-
-interface ExecRunRecord {
-  id: string;
-  presetId?: string;
-  name: string;
-  mode: ExecModeType;
-  status: ExecRunStatus;
-  stepCount: number;
-  startedAt: number;
-  finishedAt?: number;
-  threadId?: string;
-  workspaceId?: string;
-  error?: string;
-}
-
 function createExecId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -256,13 +244,6 @@ function parseFlowSteps(raw: string): string[] {
     .split('\n')
     .map((line) => line.replace(/^\s*[-*]\s*/, '').trim())
     .filter((line) => line.length > 0);
-}
-
-function formatExecRunTime(timestamp?: number): string {
-  if (!timestamp) return '';
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toLocaleString();
 }
 
 function messageIdentity(message: AgentMessage): string {
@@ -395,7 +376,6 @@ function WorkspaceScreen({
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const [showCreateThread, setShowCreateThread] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [onboardingStep, setOnboardingStep] = useState(0);
   const [showSettings, setShowSettings] = useState(false);
   const [showQrScanner, setShowQrScanner] = useState(false);
   const [qrScanEnabled, setQrScanEnabled] = useState(true);
@@ -456,6 +436,33 @@ function WorkspaceScreen({
   const [serviceTierInput, setServiceTierInput] = useState<ServiceTier>('fast');
   const [reasoningEffortInput, setReasoningEffortInput] = useState<ReasoningEffort>('medium');
   const [savingModel, setSavingModel] = useState(false);
+  const {
+    showDirectoryPicker,
+    directoryEntries,
+    directoryPath,
+    loadingDirectories,
+    openDirectoryPicker,
+    closeDirectoryPicker,
+    navigateDirectoryUp,
+    navigateToDirectory,
+    confirmDirectorySelection,
+    showRepoManager,
+    repoEntries,
+    loadingRepos,
+    cloneRepoUrl,
+    setCloneRepoUrl,
+    cloningRepo,
+    openRepoManager,
+    closeRepoManager,
+    handleCloneRepo,
+    handlePullRepo,
+    useRepoForWorkspace,
+  } = useWorkspaceRepoDirectory({
+    sendRequest,
+    mapError: toUserErrorMessage,
+    onSelectWorkspaceDirectory: setNewWorkspaceCwd,
+    onSelectAgentDirectory: setCwdInput,
+  });
   const [queueCollapsed, setQueueCollapsed] = useState(false);
   const [loadingMoreMessages, setLoadingMoreMessages] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -467,37 +474,21 @@ function WorkspaceScreen({
   } | null>(null);
   const [showFileBrowser, setShowFileBrowser] = useState(false);
   const [fileBrowserPath, setFileBrowserPath] = useState('.');
-  const [fileEntries, setFileEntries] = useState<Array<{ name: string; path: string; type: string }>>([]);
+  const [fileEntries, setFileEntries] = useState<WorkspaceFileEntry[]>([]);
   const [loadingFileEntries, setLoadingFileEntries] = useState(false);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [selectedFileContent, setSelectedFileContent] = useState('');
   const [loadingFileContent, setLoadingFileContent] = useState(false);
   const [fileBrowserError, setFileBrowserError] = useState<string | null>(null);
   const [showGitModal, setShowGitModal] = useState(false);
-  const [gitStatus, setGitStatus] = useState<{
-    branch: string;
-    isClean: boolean;
-    modified: string[];
-    notAdded: string[];
-    deleted: string[];
-    created: string[];
-  } | null>(null);
+  const [gitStatus, setGitStatus] = useState<GitStatusInfo | null>(null);
   const [gitDiff, setGitDiff] = useState('');
   const [gitBranches, setGitBranches] = useState<string[]>([]);
   const [loadingGit, setLoadingGit] = useState(false);
   const [committingGit, setCommittingGit] = useState(false);
   const [loadingNotifications, setLoadingNotifications] = useState(false);
-  const [notificationPrefs, setNotificationPrefs] = useState<Record<string, 'all' | 'errors' | 'muted'>>({});
-  const [notificationHistory, setNotificationHistory] = useState<Array<{
-    id: string;
-    timestamp: number;
-    agentId: string;
-    title: string;
-    body: string;
-    severity: 'info' | 'error';
-    status: 'sent' | 'muted' | 'no_tokens' | 'error';
-    deliveredCount: number;
-  }>>([]);
+  const [notificationPrefs, setNotificationPrefs] = useState<Record<string, NotificationLevel>>({});
+  const [notificationHistory, setNotificationHistory] = useState<NotificationHistoryEntry[]>([]);
   const [failedSend, setFailedSend] = useState<{ text: string; error: string } | null>(null);
   const [editingQueueItem, setEditingQueueItem] = useState<{ id: string; text: string } | null>(null);
   const [editingQueueText, setEditingQueueText] = useState('');
@@ -987,7 +978,6 @@ function WorkspaceScreen({
         if (cancelled) return;
         if (value !== 'done') {
           setShowOnboarding(true);
-          setOnboardingStep(0);
         }
       })
       .catch(() => {});
@@ -1402,20 +1392,22 @@ function WorkspaceScreen({
     }
   }, [newWorkspaceName]);
 
-  const loadDirectoryOptions = useCallback(async (targetPath: string) => {
+  const loadDirectoryOptions = useCallback(async (targetPath: string, baseCwdOverride?: string) => {
+    const browseCwd = baseCwdOverride?.trim() || directoryBaseCwd.trim() || '.';
     setLoadingDirectories(true);
     try {
       const res = await sendRequest('list_directories', {
-        cwd: newWorkspaceCwd.trim() || '.',
+        cwd: browseCwd,
         path: targetPath,
       });
       if (res.type !== 'response' || !res.data) {
         throw new Error(res.error || 'Failed to list directories');
       }
-      const payload = res.data as { entries?: Array<{ name: string; path: string }>; cwd?: string; path?: string };
+      const payload = res.data as { entries?: WorkspaceDirectoryEntry[]; cwd?: string; path?: string };
       const responsePath = payload.path || targetPath || '.';
-      const baseCwd = payload.cwd || newWorkspaceCwd.trim() || '.';
+      const baseCwd = payload.cwd || browseCwd;
       const normalizedPath = responsePath === '.' ? '' : responsePath.replace(/^\.\//, '');
+      setDirectoryBaseCwd(baseCwd);
       setDirectoryResolvedCwd(normalizedPath ? `${baseCwd.replace(/\/$/, '')}/${normalizedPath}` : baseCwd);
       setDirectoryPath(responsePath);
       setDirectoryEntries(payload.entries || []);
@@ -1425,7 +1417,16 @@ function WorkspaceScreen({
     } finally {
       setLoadingDirectories(false);
     }
-  }, [newWorkspaceCwd]);
+  }, [directoryBaseCwd]);
+
+  const openDirectoryPicker = useCallback((cwd: string, target: 'workspace' | 'agent') => {
+    const nextBaseCwd = cwd.trim() || '.';
+    setDirectorySelectionTarget(target);
+    setDirectoryBaseCwd(nextBaseCwd);
+    setDirectoryResolvedCwd(nextBaseCwd);
+    setShowDirectoryPicker(true);
+    void loadDirectoryOptions('.', nextBaseCwd);
+  }, [loadDirectoryOptions]);
 
   const refreshRepoEntries = useCallback(async () => {
     setLoadingRepos(true);
@@ -1683,11 +1684,20 @@ function WorkspaceScreen({
   const completeOnboarding = useCallback((openCreateAgent: boolean) => {
     AsyncStorage.setItem(ONBOARDING_DONE_KEY, 'done').catch(() => {});
     setShowOnboarding(false);
-    setOnboardingStep(0);
     if (openCreateAgent) {
       setShowCreateWorkspace(true);
     }
   }, []);
+
+  const handleConfirmDirectoryPickerSelection = useCallback(() => {
+    const selected = directoryResolvedCwd || directoryBaseCwd;
+    if (directorySelectionTarget === 'agent') {
+      setCwdInput(selected);
+    } else {
+      setNewWorkspaceCwd(selected);
+    }
+    setShowDirectoryPicker(false);
+  }, [directoryBaseCwd, directoryResolvedCwd, directorySelectionTarget]);
 
   const handleOpenQrScanner = useCallback(async () => {
     const permission = cameraPermission?.granted ? cameraPermission : await requestCameraPermission();
@@ -1822,6 +1832,11 @@ function WorkspaceScreen({
     setEditingQueueItem(null);
     setEditingQueueText('');
   };
+
+  const closeQueuedMessageEditor = useCallback(() => {
+    setEditingQueueItem(null);
+    setEditingQueueText('');
+  }, []);
 
   const handleSendNextQueued = async () => {
     if (!activeAgent) return;
@@ -2130,6 +2145,20 @@ function WorkspaceScreen({
     if (lastAgentMessage?.type === 'command' || lastAgentMessage?.type === 'command_output') return 'Running';
     return 'Typing';
   }, [activeAgent]);
+  const headerSubtitle = activeWorkspace
+    ? `${activeWorkspace.name} · ${activeThread?.title || 'No thread'}`
+    : 'No workspace selected';
+  const metaText = activeWorkspace
+    ? `${activeWorkspace.model} • ${activeWorkspace.threads.length} threads • ${activeAgent ? activeAgent.status : 'idle'}${queuedCount > 0 ? ` • queued ${queuedCount}` : ''}${gitStatus?.branch ? ` • ${gitStatus.branch} ${gitStatus.isClean ? 'clean' : 'dirty'}` : ''}`
+    : getConnectionLabel(connectionStatus);
+  const offlineBannerText = connectionStatus !== 'connected'
+    ? `Bridge offline. New messages will queue locally${offlineQueuedCount > 0 ? ` (${offlineQueuedCount} queued)` : ''}.`
+    : null;
+  const searchResults = useMemo(
+    () => ((globalSearchResults || []) as WorkspaceSearchResult[]),
+    [globalSearchResults],
+  );
+  const showSearchResults = searchScope === 'all' && searchQuery.trim().length >= 2;
   const threadLabelById = useMemo(() => {
     const labels = new Map<string, string>();
     for (const workspace of workspaces) {
@@ -2338,6 +2367,63 @@ function WorkspaceScreen({
     const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 40);
     return () => clearTimeout(timer);
   }, [activeThreadId, activeAgent?.messages.length, showActivity]);
+
+  const toggleSearchScope = useCallback(() => {
+    setSearchScope((scope) => (scope === 'thread' ? 'all' : 'thread'));
+  }, []);
+
+  const toggleActivityVisibility = useCallback(() => {
+    setShowActivity((current) => !current);
+  }, []);
+
+  const handleConversationContentSizeChange = useCallback(() => {
+    if (isNearBottomRef.current) {
+      listRef.current?.scrollToEnd({ animated: false });
+    }
+  }, []);
+
+  const handleConversationScroll = useCallback((event: any) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const isNearBottom = contentOffset.y + layoutMeasurement.height >= contentSize.height - 28;
+    isNearBottomRef.current = isNearBottom;
+    if (activeThreadId) {
+      threadScrollState.current = {
+        ...threadScrollState.current,
+        [activeThreadId]: {
+          ...threadScrollState.current[activeThreadId],
+          offset: contentOffset.y,
+          atBottom: isNearBottom,
+        },
+      };
+    }
+    setShowScrollToBottom((current) => (current === !isNearBottom ? current : !isNearBottom));
+    if (contentOffset.y <= 80) {
+      void loadOlderMessages();
+    }
+  }, [activeThreadId, loadOlderMessages]);
+
+  const handleConversationScrollToIndexFailed = useCallback((info: any) => {
+    listRef.current?.scrollToOffset({
+      offset: Math.max(0, info.averageItemLength * info.index),
+      animated: true,
+    });
+  }, []);
+
+  const handleScrollToBottom = useCallback(() => {
+    isNearBottomRef.current = true;
+    setShowScrollToBottom(false);
+    listRef.current?.scrollToEnd({ animated: true });
+  }, []);
+
+  const moreMenuItems = useMemo(() => ([
+    { icon: 'folder-outline' as const, label: 'Files', onPress: () => { setShowMoreMenu(false); handleOpenFileBrowser(); }, disabled: !activeWorkspace },
+    { icon: 'git-branch-outline' as const, label: 'Git', onPress: () => { setShowMoreMenu(false); setShowGitModal(true); void refreshGitInfo(); }, disabled: !activeWorkspace },
+    { icon: 'people-outline' as const, label: 'Agents', onPress: () => { setShowMoreMenu(false); setShowAgentDashboard(true); } },
+    { icon: 'bar-chart-outline' as const, label: 'Usage', onPress: () => { setShowMoreMenu(false); setShowUsageModal(true); } },
+    { icon: 'notifications-outline' as const, label: 'Notifications', onPress: () => { setShowMoreMenu(false); setShowNotificationsModal(true); } },
+    { icon: 'flash-outline' as const, label: 'Exec Mode', onPress: openExecRunner },
+    { icon: 'build-outline' as const, label: 'Agent Config', onPress: () => { setShowMoreMenu(false); setShowEditModel(true); }, disabled: !activeAgent },
+  ]), [activeAgent, activeWorkspace, handleOpenFileBrowser, openExecRunner, refreshGitInfo]);
 
   return (
     <KeyboardAvoidingView
