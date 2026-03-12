@@ -275,10 +275,7 @@ async function runInteractiveSetup(rootDir) {
     throw new Error(`Workspace path does not exist: ${workspacePath}`);
   }
 
-  upsertEnvVars(path.join(mobileDir, '.env.local'), {
-    EXPO_PUBLIC_BRIDGE_URL: bridgeUrl,
-    EXPO_PUBLIC_BRIDGE_API_KEY: apiKey,
-  });
+  const envFilePath = path.join(mobileDir, '.env.local');
 
   console.log(`\nBridge URL: ${bridgeUrl}`);
   console.log(`Bridge API key: ${apiKey}`);
@@ -293,6 +290,11 @@ async function runInteractiveSetup(rootDir) {
     console.log('\nInstalling mobile dependencies...\n');
     await installMobileDependencies(mobileDir);
   }
+
+  upsertEnvVars(envFilePath, {
+    EXPO_PUBLIC_BRIDGE_URL: bridgeUrl,
+    EXPO_PUBLIC_BRIDGE_API_KEY: apiKey,
+  });
 
   console.log('\nStarting bridge server...\n');
   const bridgeProcess = spawn(npmCmd, ['run', 'dev'], {

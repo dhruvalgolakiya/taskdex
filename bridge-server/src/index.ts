@@ -281,6 +281,9 @@ wss.on('connection', (ws, req) => {
             approvalPolicy,
             systemPrompt,
             agentId,
+            serviceTier,
+            reasoningEffort,
+            codexThreadId,
           } = params as {
             name: string;
             model: string;
@@ -288,6 +291,9 @@ wss.on('connection', (ws, req) => {
             approvalPolicy?: string;
             systemPrompt?: string;
             agentId?: string;
+            serviceTier?: string;
+            reasoningEffort?: string;
+            codexThreadId?: string;
           };
           const defaultCwd = process.env.CODEX_CWD || process.cwd();
           const resolvedCwd = cwd || defaultCwd;
@@ -299,6 +305,11 @@ wss.on('connection', (ws, req) => {
             approvalPolicy || 'never',
             systemPrompt || '',
             agentId,
+            {
+              serviceTier,
+              reasoningEffort,
+              codexThreadId,
+            },
           );
           reply(agent);
           break;
@@ -341,16 +352,44 @@ wss.on('connection', (ws, req) => {
           const {
             agentId,
             model,
+            cwd,
             approvalPolicy,
             systemPrompt,
+            serviceTier,
+            reasoningEffort,
           } = params as {
             agentId: string;
             model?: string;
+            cwd?: string;
             approvalPolicy?: string;
             systemPrompt?: string;
+            serviceTier?: string;
+            reasoningEffort?: string;
           };
-          manager.updateConfig(agentId, { model, approvalPolicy, systemPrompt });
+          manager.updateConfig(agentId, { model, cwd, approvalPolicy, systemPrompt, serviceTier, reasoningEffort });
           reply({ ok: true });
+          break;
+        }
+
+        case 'list_codex_threads': {
+          const { limit, cursor, cwd } = params as { limit?: number; cursor?: string; cwd?: string };
+          const result = await manager.listCodexThreads({ limit, cursor, cwd });
+          reply(result);
+          break;
+        }
+
+        case 'read_codex_thread': {
+          const { threadId } = params as { threadId: string };
+          if (!threadId?.trim()) throw new Error('threadId is required');
+          const result = await manager.readCodexThread(threadId.trim());
+          reply(result);
+          break;
+        }
+
+        case 'list_codex_models': {
+          const { includeHidden } = params as { includeHidden?: boolean };
+          const result = await manager.listCodexModels(includeHidden !== false);
+          reply(result);
           break;
         }
 

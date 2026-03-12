@@ -39,7 +39,6 @@ Setup now defaults to `dev-client` runtime, can build the native app (`expo run:
 For iOS builds, setup asks whether to run on a real iPhone or Simulator, and supports choosing a specific iPhone device name.
 When a `pnpm-lock.yaml` is present in `mobile`, the CLI installs mobile dependencies with pnpm automatically.
 Setup writes runtime bridge env values into `mobile/.env.local`, sets `CODEX_CWD` for bridge agent workspace, and can pass `OPENAI_API_KEY` if provided.
-
 For an already-cloned repo:
 
 ```bash
@@ -63,6 +62,8 @@ What this script does:
 - starts the bridge server with your chosen values
 - starts Expo and prints the QR code to open the app
 - injects bridge URL and API key into Expo so the app opens pre-configured
+
+For a reader-friendly walkthrough, see **[From Zero to Codex Mobile in 5 Minutes](docs/5-minute-local-setup.md)**.
 
 ## Bridge Server
 

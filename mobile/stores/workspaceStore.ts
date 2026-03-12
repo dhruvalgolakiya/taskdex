@@ -1,9 +1,5 @@
 import { create } from 'zustand';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { AgentWorkspace } from '../types';
-import { fetchWorkspaceGraph } from '../lib/convexClient';
-
-const WORKSPACES_KEY = 'codex_workspaces_v1';
+import type { AgentWorkspace, ReasoningEffort, ServiceTier } from '../types';
 
 function createId(prefix: string) {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -21,6 +17,8 @@ interface WorkspaceStore {
     model: string;
     cwd: string;
     approvalPolicy?: string;
+    serviceTier?: ServiceTier;
+    reasoningEffort?: ReasoningEffort;
     systemPrompt?: string;
     templateId?: string;
     templateIcon?: string;
@@ -38,11 +36,11 @@ interface WorkspaceStore {
   updateWorkspaceModel: (workspaceId: string, model: string) => void;
   updateWorkspaceConfig: (
     workspaceId: string,
-    config: Partial<Pick<AgentWorkspace, 'model' | 'cwd' | 'approvalPolicy' | 'systemPrompt' | 'templateId' | 'templateIcon'>>,
+    config: Partial<Pick<AgentWorkspace, 'model' | 'cwd' | 'approvalPolicy' | 'serviceTier' | 'reasoningEffort' | 'systemPrompt' | 'templateId' | 'templateIcon'>>,
   ) => void;
-  setWorkspacesFromConvex: (workspaces: AgentWorkspace[]) => void;
+  replaceWorkspaces: (workspaces: AgentWorkspace[]) => void;
   ensureWorkspacesFromAgents: (
-    agents: { id: string; name: string; model: string; cwd: string; approvalPolicy?: string; systemPrompt?: string }[],
+    agents: { id: string; name: string; model: string; cwd: string; approvalPolicy?: string; serviceTier?: ServiceTier; reasoningEffort?: ReasoningEffort; systemPrompt?: string }[],
   ) => void;
   removeThreadFromWorkspace: (workspaceId: string, threadAgentId: string) => void;
   replaceThreadAgentId: (workspaceId: string, oldThreadAgentId: string, newThreadAgentId: string) => void;
@@ -50,10 +48,8 @@ interface WorkspaceStore {
 }
 
 function persist(workspaces: AgentWorkspace[], activeWorkspaceId: string | null) {
-  AsyncStorage.setItem(
-    WORKSPACES_KEY,
-    JSON.stringify({ workspaces, activeWorkspaceId }),
-  ).catch(() => {});
+  void workspaces;
+  void activeWorkspaceId;
 }
 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
@@ -62,30 +58,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   loaded: false,
 
   loadSavedWorkspaces: async () => {
-    const convexWorkspaces = await fetchWorkspaceGraph();
-    if (convexWorkspaces !== null) {
-      const activeWorkspaceId = convexWorkspaces[0]?.id || null;
-      set({ workspaces: convexWorkspaces, activeWorkspaceId, loaded: true });
-      persist(convexWorkspaces, activeWorkspaceId);
-      return;
-    }
-
-    try {
-      const raw = await AsyncStorage.getItem(WORKSPACES_KEY);
-      if (!raw) {
-        set({ loaded: true });
-        return;
-      }
-      const parsed = JSON.parse(raw) as {
-        workspaces?: AgentWorkspace[];
-        activeWorkspaceId?: string | null;
-      };
-      const workspaces = Array.isArray(parsed.workspaces) ? parsed.workspaces : [];
-      const activeWorkspaceId = parsed.activeWorkspaceId || workspaces[0]?.id || null;
-      set({ workspaces, activeWorkspaceId, loaded: true });
-    } catch {
-      set({ loaded: true });
-    }
+    set({ workspaces: [], activeWorkspaceId: null, loaded: true });
   },
 
   setActiveWorkspace: (workspaceId) => {
@@ -100,6 +73,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     model,
     cwd,
     approvalPolicy,
+    serviceTier,
+    reasoningEffort,
     systemPrompt,
     templateId,
     templateIcon,
@@ -115,6 +90,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       model: model.trim() || 'gpt-5.1-codex',
       cwd: cwd.trim() || '.',
       approvalPolicy: approvalPolicy || 'never',
+      serviceTier: serviceTier || 'fast',
+      reasoningEffort: reasoningEffort || 'medium',
       systemPrompt: systemPrompt || '',
       templateId,
       templateIcon,
@@ -181,7 +158,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           ...workspace,
           ...config,
           model: config.model?.trim() || workspace.model,
-          cwd: config.cwd?.trim() || workspace.cwd,
+      cwd: config.cwd?.trim() || workspace.cwd,
+          serviceTier: config.serviceTier || workspace.serviceTier,
+          reasoningEffort: config.reasoningEffort || workspace.reasoningEffort,
           updatedAt: Date.now(),
         }
         : workspace,
@@ -190,7 +169,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     persist(workspaces, get().activeWorkspaceId);
   },
 
-  setWorkspacesFromConvex: (workspaces) => {
+  replaceWorkspaces: (workspaces) => {
     const prevActiveWorkspaceId = get().activeWorkspaceId;
     const activeWorkspaceId = prevActiveWorkspaceId && workspaces.some((workspace) => workspace.id === prevActiveWorkspaceId)
       ? prevActiveWorkspaceId
@@ -211,6 +190,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       model: agent.model,
       cwd: agent.cwd,
       approvalPolicy: agent.approvalPolicy || 'never',
+      serviceTier: agent.serviceTier || 'fast',
+      reasoningEffort: agent.reasoningEffort || 'medium',
       systemPrompt: agent.systemPrompt || '',
       threads: [{ id: agent.id, title: 'Thread 1', createdAt: now }],
       activeThreadId: agent.id,
