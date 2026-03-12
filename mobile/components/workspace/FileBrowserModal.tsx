@@ -59,15 +59,24 @@ export function FileBrowserModal({
 
           {selectedFilePath ? (
             <ScrollView style={styles.fileViewerWrap}>
-              <SyntaxHighlighter
-                highlighter="hljs"
-                language={guessLanguageFromPath(selectedFilePath)}
-                style={(resolvedTheme === 'dark' ? atomOneDark : atomOneLight) as any}
-                fontFamily={typography.mono}
-                fontSize={12}
+              <ScrollView
+                horizontal
+                bounces={false}
+                directionalLockEnabled
+                showsHorizontalScrollIndicator={false}
               >
-                {selectedFileContent}
-              </SyntaxHighlighter>
+                <SyntaxHighlighter
+                  highlighter="hljs"
+                  language={guessLanguageFromPath(selectedFilePath)}
+                  style={(resolvedTheme === 'dark' ? atomOneDark : atomOneLight) as any}
+                  fontFamily={typography.mono}
+                  fontSize={12}
+                  PreTag={View}
+                  CodeTag={Text}
+                >
+                  {selectedFileContent}
+                </SyntaxHighlighter>
+              </ScrollView>
             </ScrollView>
           ) : (
             <ScrollView style={styles.fileListWrap}>

@@ -2520,7 +2520,7 @@ function WorkspaceScreen({
             initialNumToRender={12}
             maxToRenderPerBatch={8}
             updateCellsBatchingPeriod={32}
-            removeClippedSubviews={true}
+            removeClippedSubviews={false}
             scrollEventThrottle={16}
             onScrollToIndexFailed={(info) => {
               const averageItemLength = Number.isFinite(info.averageItemLength) ? info.averageItemLength : 0;
@@ -2582,19 +2582,19 @@ function WorkspaceScreen({
 
       {!!activeAgent && (
         <View style={s.composerConfigBar}>
-          <Pressable style={s.composerConfigChip} onPress={() => setComposerPicker('model')}>
-            <Text style={s.composerConfigLabel}>Model</Text>
-            <Text style={s.composerConfigValue} numberOfLines={1}>{activeAgent.model}</Text>
+          <Pressable style={[s.composerConfigChip, composerPicker === 'model' && s.composerConfigChipActive]} onPress={() => setComposerPicker((p) => p === 'model' ? null : 'model')}>
+            <Ionicons name="chevron-down" size={12} color={composerPicker === 'model' ? colors.accent : colors.textSecondary} />
+            <Text style={[s.composerConfigValue, composerPicker === 'model' && s.composerConfigValueActive]} numberOfLines={1}>{activeAgent.model}</Text>
           </Pressable>
-          <Pressable style={s.composerConfigChip} onPress={() => setComposerPicker('speed')}>
-            <Text style={s.composerConfigLabel}>Speed</Text>
-            <Text style={s.composerConfigValue} numberOfLines={1}>
+          <Pressable style={[s.composerConfigChip, composerPicker === 'speed' && s.composerConfigChipActive]} onPress={() => setComposerPicker((p) => p === 'speed' ? null : 'speed')}>
+            <Ionicons name="flash-outline" size={12} color={composerPicker === 'speed' ? colors.accent : colors.textSecondary} />
+            <Text style={[s.composerConfigValue, composerPicker === 'speed' && s.composerConfigValueActive]} numberOfLines={1}>
               {labelForServiceTier(activeAgent.serviceTier || activeWorkspace?.serviceTier || 'fast')}
             </Text>
           </Pressable>
-          <Pressable style={s.composerConfigChip} onPress={() => setComposerPicker('reasoning')}>
-            <Text style={s.composerConfigLabel}>Reasoning</Text>
-            <Text style={s.composerConfigValue} numberOfLines={1}>
+          <Pressable style={[s.composerConfigChip, composerPicker === 'reasoning' && s.composerConfigChipActive]} onPress={() => setComposerPicker((p) => p === 'reasoning' ? null : 'reasoning')}>
+            <Ionicons name="bulb-outline" size={12} color={composerPicker === 'reasoning' ? colors.accent : colors.textSecondary} />
+            <Text style={[s.composerConfigValue, composerPicker === 'reasoning' && s.composerConfigValueActive]} numberOfLines={1}>
               {labelForReasoning(activeAgent.reasoningEffort || activeWorkspace?.reasoningEffort || 'medium')}
             </Text>
           </Pressable>
@@ -2612,25 +2612,23 @@ function WorkspaceScreen({
         colors={colors}
       />
 
-      <Modal visible={composerPicker !== null} transparent={true} animationType="fade" onRequestClose={() => setComposerPicker(null)}>
-        <KeyboardAvoidingView style={s.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-          <View style={s.modal}>
-            <Text style={s.modalTitle}>
-              {composerPicker === 'model' ? 'Choose Model' : composerPicker === 'speed' ? 'Choose Speed' : 'Choose Reasoning'}
-            </Text>
-            <ScrollView style={s.fileListWrap}>
+      {composerPicker !== null && (
+        <Pressable style={s.dropdownBackdrop} onPress={() => setComposerPicker(null)}>
+          <View style={[s.dropdownMenu, { marginBottom: bottomInset }]}>
+            <ScrollView bounces={false} style={s.dropdownScroll} showsVerticalScrollIndicator={false}>
               {composerPicker === 'model' && availableModelOptions.map((model) => {
                 const selected = model === (activeAgent?.model || activeWorkspace?.model);
                 return (
                   <Pressable
                     key={model}
-                    style={[s.composerOptionRow, selected && s.composerOptionRowActive]}
+                    style={[s.dropdownItem, selected && s.dropdownItemActive]}
                     onPress={() => void handleComposerConfigChange({
                       model,
                       reasoningEffort: defaultReasoningForModel(findCodexModel(availableModels, model)),
                     })}
                   >
-                    <Text style={[s.composerOptionTitle, selected && s.modelOptionTextActive]}>{model}</Text>
+                    <Text style={[s.dropdownItemText, selected && s.dropdownItemTextActive]} numberOfLines={1}>{model}</Text>
+                    {selected && <Ionicons name="checkmark" size={16} color={colors.accent} />}
                   </Pressable>
                 );
               })}
@@ -2639,10 +2637,11 @@ function WorkspaceScreen({
                 return (
                   <Pressable
                     key={option.value}
-                    style={[s.composerOptionRow, selected && s.composerOptionRowActive]}
+                    style={[s.dropdownItem, selected && s.dropdownItemActive]}
                     onPress={() => void handleComposerConfigChange({ serviceTier: option.value })}
                   >
-                    <Text style={[s.composerOptionTitle, selected && s.modelOptionTextActive]}>{option.label}</Text>
+                    <Text style={[s.dropdownItemText, selected && s.dropdownItemTextActive]} numberOfLines={1}>{option.label}</Text>
+                    {selected && <Ionicons name="checkmark" size={16} color={colors.accent} />}
                   </Pressable>
                 );
               })}
@@ -2651,22 +2650,18 @@ function WorkspaceScreen({
                 return (
                   <Pressable
                     key={effort}
-                    style={[s.composerOptionRow, selected && s.composerOptionRowActive]}
+                    style={[s.dropdownItem, selected && s.dropdownItemActive]}
                     onPress={() => void handleComposerConfigChange({ reasoningEffort: effort })}
                   >
-                    <Text style={[s.composerOptionTitle, selected && s.modelOptionTextActive]}>{labelForReasoning(effort)}</Text>
+                    <Text style={[s.dropdownItemText, selected && s.dropdownItemTextActive]} numberOfLines={1}>{labelForReasoning(effort)}</Text>
+                    {selected && <Ionicons name="checkmark" size={16} color={colors.accent} />}
                   </Pressable>
                 );
               })}
             </ScrollView>
-            <View style={s.modalActions}>
-              <Pressable style={s.cancelBtn} onPress={() => setComposerPicker(null)}>
-                <Text style={s.cancelText}>Close</Text>
-              </Pressable>
-            </View>
           </View>
-        </KeyboardAvoidingView>
-      </Modal>
+        </Pressable>
+      )}
 
       {showSidebar && (
         <View style={s.sidebarOverlay}>
@@ -3265,15 +3260,24 @@ function WorkspaceScreen({
 
             {selectedFilePath ? (
               <ScrollView style={s.fileViewerWrap}>
-                <SyntaxHighlighter
-                  highlighter="hljs"
-                  language={guessLanguageFromPath(selectedFilePath)}
-                  style={(resolvedTheme === 'dark' ? atomOneDark : atomOneLight) as any}
-                  fontFamily={typography.mono}
-                  fontSize={12}
+                <ScrollView
+                  horizontal
+                  bounces={false}
+                  directionalLockEnabled
+                  showsHorizontalScrollIndicator={false}
                 >
-                  {selectedFileContent}
-                </SyntaxHighlighter>
+                  <SyntaxHighlighter
+                    highlighter="hljs"
+                    language={guessLanguageFromPath(selectedFilePath)}
+                    style={(resolvedTheme === 'dark' ? atomOneDark : atomOneLight) as any}
+                    fontFamily={typography.mono}
+                    fontSize={12}
+                    PreTag={View}
+                    CodeTag={Text}
+                  >
+                    {selectedFileContent}
+                  </SyntaxHighlighter>
+                </ScrollView>
               </ScrollView>
             ) : (
               <ScrollView style={s.fileListWrap}>
@@ -5407,18 +5411,24 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   },
   composerConfigBar: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
     paddingHorizontal: 14,
     paddingBottom: 8,
   },
   composerConfigChip: {
-    flex: 1,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     backgroundColor: colors.surfaceSubtle,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  composerConfigChipActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
   },
   composerConfigLabel: {
     color: colors.textMuted,
@@ -5427,9 +5437,12 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     marginBottom: 2,
   },
   composerConfigValue: {
-    color: colors.textPrimary,
+    color: colors.textSecondary,
     fontSize: 12,
     fontFamily: typography.semibold,
+  },
+  composerConfigValueActive: {
+    color: colors.accent,
   },
   composerOptionRow: {
     paddingHorizontal: 14,
@@ -5447,6 +5460,55 @@ const createStyles = (colors: Palette) => StyleSheet.create({
   composerOptionTitle: {
     color: colors.textPrimary,
     fontSize: 14,
+    fontFamily: typography.semibold,
+  },
+  dropdownBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'flex-end',
+    zIndex: 100,
+  },
+  dropdownMenu: {
+    marginHorizontal: 14,
+    marginBottom: 4,
+    backgroundColor: colors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: 4,
+    shadowColor: colors.shadow,
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 16,
+    elevation: 8,
+    maxHeight: 320,
+  },
+  dropdownScroll: {
+    flexGrow: 0,
+  },
+  dropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginHorizontal: 4,
+    borderRadius: 10,
+  },
+  dropdownItemActive: {
+    backgroundColor: colors.accentSoft,
+  },
+  dropdownItemText: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    fontFamily: typography.medium,
+    flex: 1,
+  },
+  dropdownItemTextActive: {
+    color: colors.accent,
     fontFamily: typography.semibold,
   },
   modalActions: {

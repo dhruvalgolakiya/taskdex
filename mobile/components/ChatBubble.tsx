@@ -1,5 +1,5 @@
 import React, { memo, useMemo, useState, useRef, useEffect } from 'react';
-import { View, Text, StyleSheet, Linking, Pressable, Animated } from 'react-native';
+import { View, Text, StyleSheet, Linking, Pressable, Animated, ScrollView } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import * as Clipboard from 'expo-clipboard';
 import SyntaxHighlighter from 'react-native-syntax-highlighter';
@@ -291,15 +291,25 @@ function createMarkdownRules(styles: ReturnType<typeof createStyles>, syntaxThem
               <Text style={styles.codeCopyText}>Copy</Text>
             </Pressable>
           </View>
-          <SyntaxHighlighter
-            highlighter="hljs"
-            language={language}
-            style={syntaxTheme as any}
-            fontFamily={typography.mono}
-            fontSize={12}
+          <ScrollView
+            horizontal
+            bounces={false}
+            directionalLockEnabled
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.codeScrollContent}
           >
-            {content}
-          </SyntaxHighlighter>
+            <SyntaxHighlighter
+              highlighter="hljs"
+              language={language}
+              style={syntaxTheme as any}
+              fontFamily={typography.mono}
+              fontSize={12}
+              PreTag={View}
+              CodeTag={Text}
+            >
+              {content}
+            </SyntaxHighlighter>
+          </ScrollView>
         </View>
       );
     },
@@ -492,6 +502,9 @@ const createStyles = (colors: Palette) => StyleSheet.create({
     backgroundColor: colors.surfaceSubtle,
     overflow: 'hidden',
     marginVertical: 6,
+  },
+  codeScrollContent: {
+    minWidth: '100%',
   },
   codeHeader: {
     flexDirection: 'row',
