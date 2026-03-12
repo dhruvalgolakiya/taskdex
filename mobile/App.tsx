@@ -1156,7 +1156,7 @@ function WorkspaceScreen({
     }, 40);
 
     return () => clearTimeout(timer);
-  }, [activeThreadId, activeAgent?.id, activeAgent?.messages.length]);
+  }, [activeThreadId, activeAgent?.id]);
 
   const loadOlderMessages = useCallback(async () => {
     return;
@@ -2335,7 +2335,11 @@ function WorkspaceScreen({
   useEffect(() => {
     if (!activeAgent?.messages.length) return;
     if (!isNearBottomRef.current) return;
-    const timer = setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 40);
+    const timer = setTimeout(() => {
+      requestAnimationFrame(() => {
+        listRef.current?.scrollToEnd({ animated: true });
+      });
+    }, 40);
     return () => clearTimeout(timer);
   }, [activeThreadId, activeAgent?.messages.length, showActivity]);
 
@@ -2494,7 +2498,9 @@ function WorkspaceScreen({
             contentContainerStyle={s.chatListContent}
             onContentSizeChange={() => {
               if (isNearBottomRef.current) {
-                listRef.current?.scrollToEnd({ animated: false });
+                requestAnimationFrame(() => {
+                  listRef.current?.scrollToEnd({ animated: false });
+                });
               }
             }}
             onScroll={(event) => {
